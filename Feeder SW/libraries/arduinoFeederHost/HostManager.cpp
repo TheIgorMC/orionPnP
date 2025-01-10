@@ -8,20 +8,54 @@ void HostManager::begin(uint32_t baudRate1, uint32_t baudRate2) {
     bus2.begin(baudRate2);
 }
 
-void HostManager::sendCommand(uint8_t bus, uint8_t command, const uint8_t *data, uint8_t length) {
-    FeederPacket packet;
-    buildPacket(packet, command, data, length);
-
-    SoftwareSerial *selectedBus = (bus == 1) ? &bus1 : &bus2;
-    selectedBus->write((uint8_t *)&packet, sizeof(FeederPacket));
+void HostManager::sendPacket(SoftwareSerial &bus, const FeederPacket &packet) {
+    bus.write(&packet.header, sizeof(FeederPacket));
 }
 
-bool HostManager::receivePacket(uint8_t bus, FeederPacket &packet) {
-    SoftwareSerial *selectedBus = (bus == 1) ? &bus1 : &bus2;
-    if (selectedBus->available() > 0) {
-        uint8_t buffer[FEEDER_MAX_PACKET_SIZE];
-        size_t bytesRead = selectedBus->readBytes(buffer, FEEDER_MAX_PACKET_SIZE);
-        return parsePacket(buffer, bytesRead, packet);
+bool HostManager::receivePacket(SoftwareSerial &bus, FeederPacket &packet) {
+    if (bus.available() >= sizeof(FeederPacket)) {
+        uint8_t buffer[sizeof(FeederPacket)];
+        bus.readBytes(buffer, sizeof(FeederPacket));
+        parsePacket(buffer, packet);
+        return validatePacket(packet);
     }
     return false;
+}
+
+void HostManager::startupPolling(uint16_t address) {
+    FeederPacket packet;
+    buildPacket(packet, FEEDER_HEADER_STARTUP, address);
+    sendPacket(bus1, packet);
+}
+
+void HostManager::assignAddress(uint16_t newAddress) {
+    FeederPacket packet;
+    buildPacket(packet, FEEDER_HEADER_ASSIGN, newAddress);
+    sendPacket(bus1, packet);
+}
+
+void HostManager::hotplugPolling() {
+    FeederPacket packet;
+    buildPacket(packet, FEEDER_HEADER_HOTPLUG, 0x0000);
+    sendPacket(bus1, packet);
+}
+
+void HostManager::keepAlive(uint16_t address) {
+    FeederPacket packet;
+    buildPacket(packet, FEEDER_HEADER_KEEPALIVE, address);
+    sendPacket(bus1, packet);
+}
+
+void HostManager::feedOperation(uint16_t address) {
+    FeederPacket packet;
+    buildPacket(packet, FEEDER_HEADER_FEED, address);
+    sendPacket(bus1, packet);
+
+    // Handle feed status responses
+    FeederPacket response;
+    while (receivePacket(bus1, response)) {
+        if (response.header == FEEDER_STATUS_OK || response.header == FEEDER_STATUS_FAULT) {
+            break; // Operation complete
+        }
+    }
 }
