@@ -49,13 +49,13 @@
   #define FLASH_EEPROM_LEVELING
 #endif
 
-#define HAS_OTG_USB_HOST_SUPPORT                  // USB Flash Drive support
+//#define HAS_OTG_USB_HOST_SUPPORT                  // USB Flash Drive support
 
 //
 // Servos
 //
-#define SERVO0_PIN                          PA1
-#define SERVO1_PIN                          PC9
+//#define SERVO0_PIN                          PA1
+//#define SERVO1_PIN                          PC9
 
 //
 // Trinamic Stallguard pins
@@ -63,9 +63,9 @@
 #define X_DIAG_PIN                          PB10  // X-
 #define Y_DIAG_PIN                          PE12  // Y-
 #define Z_DIAG_PIN                          PG8   // Z-
-#define E0_DIAG_PIN                         PE15  // E0
-#define E1_DIAG_PIN                         PE10  // E1
-#define E2_DIAG_PIN                         PG5   // E2
+//#define E0_DIAG_PIN                         PE15  // E0
+//#define E1_DIAG_PIN                         PE10  // E1
+//#define E2_DIAG_PIN                         PG5   // E2
 
 //
 // Limit Switches
