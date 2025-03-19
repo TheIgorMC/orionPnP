@@ -1,0 +1,14 @@
+[NP] = Not produced
+[NW] = Not working after testing
+
+
+
+[0.1b]
+- Changed components placement to better suit assembly
+- Improved labeling and silkscreens
+- Added verification hole to check advancement
+- Moved LEDs to be aligned in the LED sub board
+- Removed holes for motors, thicker frame and thinner PCB will be used. Motor held by PCB and frame.
+
+[0.1a] [NP]
+- Initial revision of board

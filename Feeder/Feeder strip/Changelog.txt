@@ -1,0 +1,11 @@
+[NP] = Not produced
+[NW] = Not working after testing
+
+
+
+[0.1b]
+- Removed 2D matrix for tracking. Not needed on strip.
+- Added silkscreen for TERM -> termination resistor switch.
+
+[0.1a] [NP]
+- Initial revision of board

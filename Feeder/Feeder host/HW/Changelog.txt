@@ -1,0 +1,13 @@
+[NP] = Not produced
+[NW] = Not working after testing
+
+
+[0.1c]
+- Added TP in various crucial points to aid debug.
+
+[0.1b] [NP]
+- Changed fills to remove spokes and use direct connection, more contact area = better?
+- Moved some components' silkscreen markings for better readability
+
+[0.1a] [NP]
+- Initial revision of board
