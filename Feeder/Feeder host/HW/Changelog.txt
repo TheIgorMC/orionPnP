@@ -2,7 +2,12 @@
 [NW] = Not working after testing
 
 
-[0.1c]
+[0.1d]
+- Added fiducials for future PnP compatibility
+- Changed LED resistors to 2k_0805 to improve lifespan
+- Added diode to FAULT LED to keep active on MCU failure
+
+[0.1c] [NP]
 - Added TP in various crucial points to aid debug.
 
 [0.1b] [NP]
