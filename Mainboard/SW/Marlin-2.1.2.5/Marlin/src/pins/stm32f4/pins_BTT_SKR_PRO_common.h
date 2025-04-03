@@ -110,7 +110,7 @@
 // Z Probe must be this pin
 //
 #ifndef Z_MIN_PROBE_PIN
-  #define Z_MIN_PROBE_PIN                   PA2
+  #define Z_MIN_PROBE_PIN                   PG2
 #endif
 
 //
@@ -150,33 +150,35 @@
   #define Y_CS_PIN                          PB8
 #endif
 
-#define Z_STEP_PIN                          PE13
-#define Z_DIR_PIN                           PC2
-#define Z_ENABLE_PIN                        PC0
+#define Y2_STEP_PIN                          PE13
+#define Y2_DIR_PIN                           PC2
+#define Y2_ENABLE_PIN                        PC0
+#ifndef Y2_CS_PIN
+  #define Y2_CS_PIN                          PC10
+#endif
+
+#define Z_STEP_PIN                          PE14
+#define Z_DIR_PIN                           PA0
+#define Z_ENABLE_PIN                        PC3
 #ifndef Z_CS_PIN
   #define Z_CS_PIN                          PB9
 #endif
 
-#define E0_STEP_PIN                         PE14
-#define E0_DIR_PIN                          PA0
-#define E0_ENABLE_PIN                       PC3
-#ifndef E0_CS_PIN
-  #define E0_CS_PIN                         PB3
+#define I_STEP_PIN                          PD15
+#define I_DIR_PIN                           PE7
+#define I_ENABLE_PIN                        PA3
+#ifndef I_CS_PIN
+  #define I_CS_PIN                          PB3
 #endif
 
-#define E1_STEP_PIN                         PD15
-#define E1_DIR_PIN                          PE7
-#define E1_ENABLE_PIN                       PA3
-#ifndef E1_CS_PIN
-  #define E1_CS_PIN                         PG15
+#define J_STEP_PIN                         PD13
+#define J_DIR_PIN                          PG9
+#define J_ENABLE_PIN                       PF0
+#ifndef J_CS_PIN
+  #define J_CS_PIN                         PG15
 #endif
 
-#define E2_STEP_PIN                         PD13
-#define E2_DIR_PIN                          PG9
-#define E2_ENABLE_PIN                       PF0
-#ifndef E2_CS_PIN
-  #define E2_CS_PIN                         PG12
-#endif
+
 
 //
 // SPI pins for TMC2130 stepper drivers
@@ -212,10 +214,10 @@
 
   #define X_SERIAL_TX_PIN                   PC13
   #define Y_SERIAL_TX_PIN                   PE3
-  #define Z_SERIAL_TX_PIN                   PE1
-  #define E0_SERIAL_TX_PIN                  PD4
-  #define E1_SERIAL_TX_PIN                  PD1
-  #define E2_SERIAL_TX_PIN                  PD6
+  #define Y2_SERIAL_TX_PIN                   PE1
+  #define Z_SERIAL_TX_PIN                  PD4
+  #define I_SERIAL_TX_PIN                  PD1
+  #define J_SERIAL_TX_PIN                  PD6
 
   // Reduce baud rate to improve software serial reliability
   #ifndef TMC_BAUD_RATE

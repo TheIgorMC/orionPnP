@@ -1260,7 +1260,7 @@ void MarlinSettings::postprocess() {
 
         const bool volumetric_enabled = false;
         EEPROM_WRITE(volumetric_enabled);
-        dummyf = DEFAULT_NOMINAL_FILAMENT_DIA;
+        dummyf = 2;
         for (uint8_t q = EXTRUDERS; q--;) EEPROM_WRITE(dummyf);
         dummyf = DEFAULT_VOLUMETRIC_EXTRUDER_LIMIT;
         for (uint8_t q = EXTRUDERS; q--;) EEPROM_WRITE(dummyf);
