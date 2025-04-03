@@ -1,9 +1,9 @@
-  AppVersion = 81012
+  AppVersion = 81004
   FileVersion = 2
 [GENERAL]
   aATEModuleSel[24] = 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
   ConnectMode = 0
-  CurrentFile = "C:\Users\Mattia\Documents\GitHub\orionPnP\Mainboard\SW\Marlin-2.1.2.5\.pio\build\BIGTREE_SKR_PRO\firmware.bin"
+  CurrentFile = "C:\Users\giova\Documents\GitHub\orionPnP\Mainboard\SW\Marlin-2.1.2.5\.pio\build\BIGTREE_SKR_PRO\firmware.bin"
   DataFileSAddr = 0x08000000
   GUIMode = 0
   HostName = ""
