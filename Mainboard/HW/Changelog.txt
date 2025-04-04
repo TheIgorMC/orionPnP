@@ -1,0 +1,21 @@
+[NP] = Not produced
+[NW] = Not working after testing
+
+
+[0.2a]
+- Fixed USB hub connections, added capacitors to SSTX and resistor to R1 pin
+- Switched buck converter to different model to fix Issues in 3V3 rail
+- Changed buck converter input to be 12V instead of 5V for better efficency
+- Rerouted USBSS signals for newly added capacitors
+- Changed fuse holders for Issues in soldering (hard to solder SMD in limited space, THT should be better)
+- Added power LED on 3V3 rail (should not light up if 12V off, which means 24V is off, which means board is off?)
+
+[0.1c] [NP]
+- Fixed capacitor C50 footprint being not visible
+
+[0.1b] [NW]
+- Fixed some layout Issues
+- Added 2D matrix for traceability
+
+[0.1a] [NP]
+- Initial revision of board
