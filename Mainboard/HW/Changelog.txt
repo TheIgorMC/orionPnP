@@ -3,6 +3,7 @@
 
 
 [0.2a]
+- Changed USB hub chip to VSON variant for better availability
 - Fixed USB hub connections, added capacitors to SSTX and resistor to R1 pin
 - Added filtering RC to GND on USB connectors shells
 - Switched buck converter to different model to fix Issues in 3V3 rail
