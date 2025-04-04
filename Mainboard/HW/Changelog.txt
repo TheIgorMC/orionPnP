@@ -4,6 +4,7 @@
 
 [0.2a]
 - Fixed USB hub connections, added capacitors to SSTX and resistor to R1 pin
+- Added filtering RC to GND on USB connectors shells
 - Switched buck converter to different model to fix Issues in 3V3 rail
 - Changed buck converter input to be 12V instead of 5V for better efficency
 - Rerouted USBSS signals for newly added capacitors
