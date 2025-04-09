@@ -2,8 +2,16 @@
 [NW] = Not working after testing
 
 
+[0.2a]
+- Total redesign according to HW revision 2
+- Improved pricing by using resettable fuse and fewer components
+- Switched to powerPad variant of the motor driver for better availability
+- Switched to ATMega328PB as MCU
+- Lowered part count as much as possible to aid in cost reduction
+- Switched to double optical photointerrupters to get precise feedback (placed so they should allow 2mm pitch component feeding)
 
-[0.1b]
+
+[0.1b] [NP]
 - Changed components placement to better suit assembly
 - Improved labeling and silkscreens
 - Added verification hole to check advancement
