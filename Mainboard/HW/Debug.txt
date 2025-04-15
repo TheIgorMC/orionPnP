@@ -1,0 +1,7 @@
+[0.1b]
+
+3V3 RAIL NOT WORKING
+- Replaced R_high on the 3v3 buck to ensure it was 100k, still not turning to 3v3
+- Tried to feed 3V3 from the rail to check FB voltage, spot on at 600mV (precisely what the SY chip needs)
+- Tried increasing output capacitance to compensate for suboptimal performance of the 2x22uF caps but not resolving
+- Tried to increase capacitance across BS and LX to try and compensate poor performance of the cap [waiting outcome]
