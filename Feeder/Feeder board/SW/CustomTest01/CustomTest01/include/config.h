@@ -1,29 +1,52 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+
+// ==== General configuration flags ====
+
+#define ENABLE_SELFTEST 1 // Enable self-test mode for debugging
+#define ENABLE_DEBUG 1 // Enable debug mode for verbose output
+
+
+// ==== Inverted logic flags ====
+
+#define INVERT_DIR_A 1 // Invert direction logic for motor A
+#define INVERT_DIR_B 1 // Invert direction logic for motor B
+#define INVERT_FAULT_LED 0 // Invert fault logic for fault LED
+#define INVERT_OPTO 1 // Invert opto logic for opto sensors
+#define SW_ACTIVE_LOW 1 // Invert logic for switches
+
+
+
+// ==== Pin definitions ====
+
 // ==== Motor A (DRV8833 H-Bridge) ====
-#define MOTOR_A_IN1 5  // PWM capable
-#define MOTOR_A_IN2 4  // Direction logic or PWM
+#define MOTOR_A_IN1 PB1  // PWM capable
+#define MOTOR_A_IN2 PB2  // Direction logic or PWM
 
 // ==== Motor B ====
-#define MOTOR_B_IN1 6  // PWM
-#define MOTOR_B_IN2 7  // Direction logic or PWM
+#define MOTOR_B_IN1 PD5  // PWM
+#define MOTOR_B_IN2 PD6  // Direction logic or PWM
 
 // ==== RS485 ====
-#define RS485_RE_DE 2 // RE+DE control pin
+#define RS485_RE_DE PD2 // RE+DE control pin
 
 // ==== Status RGB LEDs (Neopixels) ====
-#define LED_RGB_PIN 3 // Data line for SK6812/WS2812 chain
+#define LED_RGB_PIN PD3 // Data line for SK6812/WS2812 chain
+
+// ==== Fault LED ====
+#define FAULT_LED_PIN PD7 // Generic board fault LED
 
 // ==== Opto Sensors ====
-#define OPTO1_PIN 8 // Digital or analog read
-#define OPTO2_PIN 9
+#define OPTO1_PIN PC2 // Digital or analog read
+#define OPTO2_PIN PC3
 
 // ==== User Switches ====
-#define SW1_PIN 10
-#define SW2_PIN 11
+#define SW1_PIN PC0
+#define SW2_PIN PC1
 
 // ==== Fault Pin (DRV8833 FAULT) ====
-#define DRV_FAULT_PIN 12 // Input with pull-up
+#define DRV_FAULT_PIN PB0 // Input with pull-up
+#define DRV_SLEEP_PIN PD4 // Sleep pin for DRV8833
 
 #endif
