@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "BenchTest01",
+			"path": "TestBench01/BenchTest01"
+		},
+		{
+			"name": "CustomTest01",
+			"path": "CustomTest01/CustomTest01"
+		}
+	],
+	"settings": {}
+}
