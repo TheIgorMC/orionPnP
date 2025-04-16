@@ -37,8 +37,16 @@ bool OrionReceivePacket(Stream& serial, OrionPacket& packet) {
 void OrionSendPacket(Stream& serial, const OrionPacket& packetIn) {
     OrionPacket packet = packetIn;
     packet.crc = OrionGetCRC(packet);
+  
+    digitalWrite(RS485_RE_DE, HIGH); // enable TX
+    delayMicroseconds(10);           // small settle delay if needed
+  
     serial.write((uint8_t*)&packet, ORION_PACKET_SIZE);
-}
+    serial.flush();                  // wait until all data sent
+  
+    delayMicroseconds(10);          // optional: settle before switching
+    digitalWrite(RS485_RE_DE, LOW); // back to RX
+  }
 
 // ==== Make Packet ====
 OrionPacket OrionMakePacket(uint16_t address, uint8_t commandId, OrionCommand cmd, uint16_t payload) {

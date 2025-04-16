@@ -49,6 +49,8 @@
 // ==== User Switches ====
 #define SW1_PIN PC0
 #define SW2_PIN PC1
+#define SW_DEBOUNCE_TIME_MS 10
+#define SW_TRIGGER_DELAY_MS 2
 
 // ==== Fault Pin (DRV8833 FAULT) ====
 #define DRV_FAULT_PIN PB0 // Input with pull-up

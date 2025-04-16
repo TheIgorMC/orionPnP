@@ -5,6 +5,7 @@
 
 // ==== Constants ====
 #define ORION_START_BYTE 0xAA
+#define ORION_HOST_ADDR 0xFFFF
 #define ORION_PROTOCOL_VERSION 1
 #define ORION_PACKET_SIZE 10
 #define ORION_ACK_TIMEOUT_MS 40 
