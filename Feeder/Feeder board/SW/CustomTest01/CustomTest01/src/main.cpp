@@ -15,7 +15,7 @@
  *   - Command processing via Orion Protocol
  *   - EEPROM-based address storage
  *   - Self-test functionality (optional)
- *  * 
+ * 
  * Notes:
  *   - Ensure proper wiring of motors, LEDs, and switches.
  *   - Adjust constants in config.h as per hardware setup.
