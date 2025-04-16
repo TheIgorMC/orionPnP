@@ -5,7 +5,7 @@
 
 void runSelfTest()
 {
-    Serial.println(F("Running self-test..."));
+    Serial1.println(F("Running self-test..."));
 
     testFaultLed(); // Test fault LED
 
@@ -17,7 +17,7 @@ void runSelfTest()
 
     testMotorsAndOpto(); // Test motors and opto sensors
         
-    Serial.println(F("Self-test (but not too self) complete."));
+    Serial1.println(F("Self-test (but not too self) complete."));
     
 }
 
@@ -28,13 +28,13 @@ void testFaultLed()
     digitalWrite(FAULT_LED_PIN, !INVERT_FAULT_LED); // Turn on fault LED
     delay(1000);                                    // Wait for 1 second
     digitalWrite(FAULT_LED_PIN, INVERT_FAULT_LED);  // Turn off fault LED
-    Serial.println(F("Fault LED test executed."));
+    Serial1.println(F("Fault LED test executed."));
 }
 
 // ===== Test RGB ======
 void testRGB(Adafruit_NeoPixel strip)
 {
-    Serial.println(F("Testing RGB strip..."));
+    Serial1.println(F("Testing RGB strip..."));
     strip.begin();
     strip.show(); // Initialize all pixels to 'off'
 
@@ -52,13 +52,13 @@ void testRGB(Adafruit_NeoPixel strip)
 
     strip.setPixelColor(0, strip.Color(0, 0, 0)); // Off
     strip.show();
-    Serial.println(F("RGB strip test executed."));
+    Serial1.println(F("RGB strip test executed."));
 }
 
 // ====== Test Switches ======
 void testSwitches(Adafruit_NeoPixel strip) {
     
-    Serial.println(F("Testing switches..."));
+    Serial1.println(F("Testing switches..."));
     pinMode(SW1_PIN, INPUT_PULLUP); // Set switch pins as input with pull-up
     pinMode(SW2_PIN, INPUT_PULLUP); // Set switch pins as input with pull-up
     
@@ -69,7 +69,7 @@ void testSwitches(Adafruit_NeoPixel strip) {
     while (digitalRead(SW1_PIN) == SW_ACTIVE_LOW) {
         // Wait for switch 1 to be pressed
     }
-    Serial.println(F("Switch 1 pressed."));
+    Serial1.println(F("Switch 1 pressed."));
     {
         strip.setPixelColor(0, strip.Color(0, 255, 0)); // Set first LED to green
         strip.show();
@@ -79,7 +79,7 @@ void testSwitches(Adafruit_NeoPixel strip) {
     while (digitalRead(SW2_PIN) == SW_ACTIVE_LOW) {
         // Wait for switch 2 to be pressed
     }
-    Serial.println(F("Switch 2 pressed."));
+    Serial1.println(F("Switch 2 pressed."));
     {
         strip.setPixelColor(1, strip.Color(0, 255, 0)); // Set second LED to green
         strip.show();
@@ -89,14 +89,14 @@ void testSwitches(Adafruit_NeoPixel strip) {
     strip.setPixelColor(0, strip.Color(0, 0, 0)); // Set first LED to off
     strip.setPixelColor(1, strip.Color(0, 0, 0)); // Set second LED to off
     strip.show();
-    Serial.println(F("Switch test executed."));
+    Serial1.println(F("Switch test executed."));
     
 }
 
 // ====== Test Motors and Opto Sensors ======
 void testMotorsAndOpto()
 {
-    Serial.println(F("Testing motors and optos..."));
+    Serial1.println(F("Testing motors and optos..."));
     pinMode(MOTOR_A_IN1, OUTPUT); // Set motor pins as output
     pinMode(MOTOR_A_IN2, OUTPUT); // Set motor pins as output
     pinMode(MOTOR_B_IN1, OUTPUT); // Set motor pins as output
@@ -110,12 +110,12 @@ void testMotorsAndOpto()
     delay(100); // Wait for 100ms to allow the driver to wake up
     if (digitalRead(DRV_FAULT_PIN) == INVERT_FAULT_LED)
     { // Check if fault pin is triggered
-        Serial.println(F("Fault detected!"));
+        Serial1.println(F("Fault detected!"));
         digitalWrite(DRV_SLEEP_PIN, LOW); // Put the driver to sleep
         return; // Exit the function if fault is detected
     }
         
-    Serial.println(F("Testing feed motor..."));
+    Serial1.println(F("Testing feed motor..."));
     // Drive feed motor forward
     digitalWrite(MOTOR_A_IN1, HIGH); // Set IN1 high
     digitalWrite(MOTOR_A_IN2, LOW);  // Set IN2 low
@@ -126,7 +126,7 @@ void testMotorsAndOpto()
     digitalWrite(MOTOR_A_IN2, LOW); // Set IN2 low
     if (digitalRead(DRV_FAULT_PIN) == INVERT_FAULT_LED)
     { // Check if fault pin is triggered
-        Serial.println(F("Fault detected!"));
+        Serial1.println(F("Fault detected!"));
         digitalWrite(DRV_SLEEP_PIN, LOW); // Put the driver to sleep
         return; // Exit the function if fault is detected
     }
@@ -140,13 +140,13 @@ void testMotorsAndOpto()
     digitalWrite(MOTOR_A_IN1, LOW);
     digitalWrite(MOTOR_A_IN2, LOW);
     if (digitalRead(DRV_FAULT_PIN) == INVERT_FAULT_LED) {
-        Serial.println(F("Fault detected!"));
+        Serial1.println(F("Fault detected!"));
         digitalWrite(DRV_SLEEP_PIN, LOW);
         return;
     }
-    Serial.println(F("Feed motor test completed."));
+    Serial1.println(F("Feed motor test completed."));
 
-    Serial.println(F("Testing peel motor..."));
+    Serial1.println(F("Testing peel motor..."));
     // Drive peel motor forward
     digitalWrite(MOTOR_B_IN1, HIGH);
     digitalWrite(MOTOR_B_IN2, LOW);
@@ -156,7 +156,7 @@ void testMotorsAndOpto()
     digitalWrite(MOTOR_B_IN1, LOW);
     digitalWrite(MOTOR_B_IN2, LOW);
     if (digitalRead(DRV_FAULT_PIN) == INVERT_FAULT_LED) {
-        Serial.println(F("Fault detected!"));
+        Serial1.println(F("Fault detected!"));
         digitalWrite(DRV_SLEEP_PIN, LOW);
         return;
     }
@@ -170,14 +170,14 @@ void testMotorsAndOpto()
     digitalWrite(MOTOR_B_IN1, LOW);
     digitalWrite(MOTOR_B_IN2, LOW);
     if (digitalRead(DRV_FAULT_PIN) == INVERT_FAULT_LED) {
-        Serial.println(F("Fault detected!"));
+        Serial1.println(F("Fault detected!"));
         digitalWrite(DRV_SLEEP_PIN, LOW);
         return;
     }
-    Serial.println(F("Peel motor test completed."));
+    Serial1.println(F("Peel motor test completed."));
 
 
-    Serial.println(F("Motor tests executed. Testing optos..."));
+    Serial1.println(F("Motor tests executed. Testing optos..."));
 
     // Test opto sensors moving forward and checking for signal
     digitalWrite(MOTOR_A_IN1, HIGH); // Set IN1 high
@@ -192,7 +192,7 @@ void testMotorsAndOpto()
         }
         delay(500); // Wait for 0.5 seconds
     }
-    Serial.println(F("Opto sensor 1 tested."));
+    Serial1.println(F("Opto sensor 1 tested."));
 
     count = 0; // Reset count for opto sensor 2 test
     while (count < 5)
@@ -203,14 +203,14 @@ void testMotorsAndOpto()
         }
         delay(500); // Wait for 0.5 seconds
     }
-    Serial.println(F("Opto sensor 2 tested."));
+    Serial1.println(F("Opto sensor 2 tested."));
 
     // Stop motor
     digitalWrite(MOTOR_A_IN1, LOW); // Set IN1 low
     digitalWrite(MOTOR_A_IN2, LOW); // Set IN2 low
 
     digitalWrite(DRV_SLEEP_PIN, LOW); // Put the driver to sleep
-    Serial.println(F("Opto tests executed."));
+    Serial1.println(F("Opto tests executed."));
 }
 
 

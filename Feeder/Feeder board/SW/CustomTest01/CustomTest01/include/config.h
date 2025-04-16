@@ -6,7 +6,7 @@
 
 #define ENABLE_SELFTEST 1 // Enable self-test mode for debugging
 #define ENABLE_DEBUG 1 // Enable debug mode for verbose output
-
+// #define ORION_IS_HOST // Uncomment this line if the device is a host board instead of a feeder
 
 // ==== Inverted logic flags ====
 
@@ -16,7 +16,8 @@
 #define INVERT_OPTO 1 // Invert opto logic for opto sensors
 #define SW_ACTIVE_LOW 1 // Invert logic for switches
 
-
+// ==== EEPROM configuration ====
+#define EEPROM_ADDR_LOCATION 0x00
 
 // ==== Pin definitions ====
 
