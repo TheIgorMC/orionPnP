@@ -1,7 +1,16 @@
 [0.1b]
 
-3V3 RAIL NOT WORKING
+3V3 RAIL NOT WORKING [FIXED]
 - Replaced R_high on the 3v3 buck to ensure it was 100k, still not turning to 3v3
 - Tried to feed 3V3 from the rail to check FB voltage, spot on at 600mV (precisely what the SY chip needs)
 - Tried increasing output capacitance to compensate for suboptimal performance of the 2x22uF caps but not resolving
-- Tried to increase capacitance across BS and LX to try and compensate poor performance of the cap [waiting outcome]
+- Fixed placement of BS capacitor C12, now across pins 5-6. Fixed the issue.
+
+USB HUB NOT DETECTED [FIXED]
+- Placed the correct 19k2 resistor on pin 1 to GND to fix the issue. Still not enumerating on windows
+
+USB HUB NOT ENUMERATING [FIXED]
+- Cut traces of SSTX to the hub and placed 100nF capacitors in series (LCSC code: C1525 / OrionID: 52), fixed the issue, hub working.
+
+USB NOT WORKING ON STM32
+- Adjusted settings for flash to make sure PLL is working at intended frequency
