@@ -41,6 +41,10 @@
 // ==== Opto Sensors ====
 #define OPTO1_PIN PC2 // Digital or analog read
 #define OPTO2_PIN PC3
+#define DEBOUNCE_TIME_MS 10
+#define OPTO_TRIGGER_DELAY_MS 2
+#define OPTO_TIMEOUT_MS 2000 // Max time to wait for sensor
+
 
 // ==== User Switches ====
 #define SW1_PIN PC0

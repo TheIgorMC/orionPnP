@@ -1,12 +1,12 @@
 #include <Arduino.h>
-#include "Adafruit_NeoPixel.h"
 #include "config.h"
 #include "OrionProtocol.cpp"
+#include "LedStrip.cpp"
 #include <EEPROM.h>
 
 // ===== If selftest needed ======
 #if ENABLE_SELFTEST
-#include "selftest.h"
+#include "selftest.cpp"
 #endif
 
 
@@ -21,20 +21,27 @@
 
 
 // ====== Strip initialization ======
-Adafruit_NeoPixel strip(2, LED_RGB_PIN, NEO_GRB + NEO_KHZ800); // Declare RGB strip
+LedStrip ledStrip(2, LED_RGB_PIN); // 2 pixels on the strip
 
 // ====== Protocol variables ======
 OrionQueue commandQueue;
 OrionPacket incomingPacket;
-int feederAddress = 0x0001; // Feeder address (default)
+uint16_t feederAddress = 0x0001; // Feeder address (default)
 
 // ====== Function prototypes ======
-void BootAnimation(Adafruit_NeoPixel &strip);
-void GlowAnimation(Adafruit_NeoPixel &strip, uint8_t r, uint8_t g, uint8_t b);
-void FadeTo(Adafruit_NeoPixel &strip, uint8_t targetR, uint8_t targetG, uint8_t targetB);
-
+void processCommand(const OrionPacket& packet);
+uint16_t readFeederAddress();
+bool writeFeederAddress(uint16_t address);
+void feed(int steps);
+void startMotors();
+void stopMotors();
+void setMotorDirection(bool forward);
 
 void setup() {
+
+  ledStrip.begin();
+  ledStrip.startGlow(255, 255, 0, -1); // Start glow on all pixels
+  ledStrip.update();
 
   OrionQueueInit(commandQueue);
   Serial1.begin(115200);
@@ -44,8 +51,13 @@ void setup() {
     runSelfTest();
   #endif
 
-  Serial1.println(F("Feeder main logic starting..."));
-  // Initialize motors, comms, etc.
+  if(ENABLE_DEBUG)Serial1.println(F("Reading stored data..."));
+  feederAddress = readFeederAddress(); // Read address from EEPROM
+
+  delay(1000); // Wait for serial to stabilize
+  if(ENABLE_DEBUG)Serial1.println(F("Feeder booting..."));
+  
+
 }
 
 void loop()
@@ -121,76 +133,83 @@ void processCommand(const OrionPacket& packet) {
     }
 }
 
-
-// ====== Boot Animation ======
-void BootAnimation(Adafruit_NeoPixel &strip) {
-  for (int i = 0; i < LED_ANIMATION_STEPS * 2; i++) {
-      float angle = (i / (float)LED_ANIMATION_STEPS) * 3.14159; // 0 to PI*2
-      float brightness = (sin(angle) + 1.0) / 2.0; // 0 to 1
-      uint8_t value = (uint8_t)(brightness * 255);
-      uint32_t color = strip.Color(0, 0, value); // Blue
-      strip.setPixelColor(0, color);
-      strip.setPixelColor(1, color);
-      strip.show();
-      delay(LED_ANIMATION_DELAY);
-  }
-}
-
-// ===== Glow Animation ======
-void GlowAnimation(Adafruit_NeoPixel &strip, uint8_t r, uint8_t g, uint8_t b, int ledID = -1) {
-  for (int i = 0; i < LED_ANIMATION_STEPS * 2; i++) {
-      float angle = (i / (float)LED_ANIMATION_STEPS) * 3.14159; // 0 to PI*2
-      float brightness = (sin(angle) + 1.0) / 2.0; // 0 to 1
-      uint8_t br = (uint8_t)(brightness * 255);
-      uint32_t color = strip.Color((r * br) / 255, (g * br) / 255, (b * br) / 255);
-      
-      if (ledID >= 0 && ledID < strip.numPixels()) {
-          strip.setPixelColor(ledID, color);
-      } else {
-          for (int j = 0; j < strip.numPixels(); j++) {
-              strip.setPixelColor(j, color);
-          }
-      }
-
-      strip.show();
-      delay(LED_ANIMATION_DELAY);
-  }
-}
-
-// ===== Fade to Animation ======
-void FadeTo(Adafruit_NeoPixel &strip, uint8_t targetR, uint8_t targetG, uint8_t targetB, int ledID = -1) {
-  for (int step = 0; step <= LED_ANIMATION_STEPS; step++) {
-      float t = step / (float)LED_ANIMATION_STEPS;
-
-      if (ledID >= 0 && ledID < strip.numPixels()) {
-          uint32_t current = strip.getPixelColor(ledID);
-          uint8_t r = (uint8_t)((1 - t) * ((current >> 16) & 0xFF) + t * targetR);
-          uint8_t g = (uint8_t)((1 - t) * ((current >> 8) & 0xFF) + t * targetG);
-          uint8_t b = (uint8_t)((1 - t) * (current & 0xFF) + t * targetB);
-          strip.setPixelColor(ledID, strip.Color(r, g, b));
-      } else {
-          for (int i = 0; i < strip.numPixels(); i++) {
-              uint32_t current = strip.getPixelColor(i);
-              uint8_t r = (uint8_t)((1 - t) * ((current >> 16) & 0xFF) + t * targetR);
-              uint8_t g = (uint8_t)((1 - t) * ((current >> 8) & 0xFF) + t * targetG);
-              uint8_t b = (uint8_t)((1 - t) * (current & 0xFF) + t * targetB);
-              strip.setPixelColor(i, strip.Color(r, g, b));
-          }
-      }
-
-      strip.show();
-      delay(LED_ANIMATION_DELAY);
-  }
-}
-
 // ===== EEPROM Functions ======
 uint16_t readFeederAddress() {
   uint16_t address;
   EEPROM.get(EEPROM_ADDR_LOCATION, address);
   if (address == 0x0000 || address > 1023) {
+    if(ENABLE_DEBUG)Serial1.println(F("Invalid or unset address, using default."));
     return 0x0000;  // Treat invalid or unset as uninitialized
   }
+  if(ENABLE_DEBUG)Serial1.print(F("Feeder address read from EEPROM: "));
+  if(ENABLE_DEBUG)Serial1.println(address, HEX);
   return address;
 }
 
+bool writeFeederAddress(uint16_t address) {
+  if (address == 0x0000 || address > 1023) {
+    if(ENABLE_DEBUG)Serial1.println(F("Invalid address, not writing to EEPROM."));
+    return false; // Invalid address, do not write
+  }
+  EEPROM.put(EEPROM_ADDR_LOCATION, address);
+  if(ENABLE_DEBUG)Serial1.print(F("Feeder address written to EEPROM: "));
+  if(ENABLE_DEBUG)Serial1.println(address, HEX);
+  return true;
+}
 
+// ====== Motor control functions ======
+void feed(int steps) {
+  if (steps == 0) {
+    stopMotors();
+    return;
+  }
+
+  bool direction = steps > 0;
+  setMotorDirection(direction);
+  startMotors();
+
+  uint32_t startTime = millis();
+
+  // Wait before checking optos
+  while (millis() - startTime < OPTO_TRIGGER_DELAY_MS) {
+    // Ignore opto triggers
+  }
+
+  // Reset start time for timeout
+  startTime = millis();
+
+  // Watch for opto trigger or timeout
+  while (millis() - startTime < OPTO_TIMEOUT_MS) {
+    if (digitalRead(OPTO1_PIN) || digitalRead(OPTO2_PIN)) {
+      delay(DEBOUNCE_TIME_MS);
+      if (digitalRead(OPTO1_PIN) || digitalRead(OPTO2_PIN)) {
+        stopMotors();
+        return;
+      }
+    }
+  }
+
+  // Timeout fallback
+  stopMotors();
+#if ENABLE_DEBUG
+  Serial1.println(F("Feeder timeout: opto not triggered"));
+#endif
+}
+
+void startMotors() {
+  analogWrite(MOTOR_A_IN1, FEED_SPEED); // Set speed
+  digitalWrite(MOTOR_A_IN2, LOW);       // Or reverse if needed
+}
+
+void stopMotors() {
+  analogWrite(MOTOR_A_IN1, 0);
+  analogWrite(MOTOR_A_IN2, 0);
+}
+
+void setMotorDirection(bool forward) {
+  if (forward) {
+    digitalWrite(MOTOR_A_IN2, LOW);
+  } else {
+    digitalWrite(MOTOR_A_IN2, HIGH); // Or use a different pin if needed
+  }
+}
