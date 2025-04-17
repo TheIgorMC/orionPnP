@@ -13,4 +13,4 @@ USB HUB NOT ENUMERATING [FIXED]
 - Cut traces of SSTX to the hub and placed 100nF capacitors in series (LCSC code: C1525 / OrionID: 52), fixed the issue, hub working.
 
 USB NOT WORKING ON STM32
-- Adjusted settings for flash to make sure PLL is working at intended frequency
+- Adjusted settings for flash to make sure PLL is working at intended frequency, fixed the issue, USB COM port now working properly.
