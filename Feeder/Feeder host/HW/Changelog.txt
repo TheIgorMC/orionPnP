@@ -2,7 +2,17 @@
 [NW] = Not working after testing
 
 
-[0.1d]
+[0.2a]
+- Redesign for smaller footprint and added functionality
+- Switched to STM32F072 for added serials
+- Added 3rd line of RS485 bus to be used as programmer
+- Embedded a programming strip and switch, with Relay control
+- Added i2c OLED screen and encoder for programming
+- Switched to the same connectors used for the mainboard
+- Activity, programming, power and fault LED on board
+- RX and TX indicator LEDs per bus
+
+[0.1d] [NP]
 - Added fiducials for future PnP compatibility
 - Changed LED resistors to 2k_0805 to improve lifespan
 - Added diode to FAULT LED to keep active on MCU failure
