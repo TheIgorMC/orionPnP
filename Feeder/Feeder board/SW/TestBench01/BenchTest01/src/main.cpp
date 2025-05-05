@@ -1,57 +1,50 @@
 #include <Arduino.h>
 #include "config.h"
 
-uint8_t pwmVal = DEFAULT_PWM;
-uint16_t onTime = DEFAULT_ON_TIME;
-uint16_t offTime = DEFAULT_OFF_TIME;
-
-void setupMotorPins() {
+void setup() {
   pinMode(MOTOR_A_PWM, OUTPUT);
   pinMode(MOTOR_A_DIR, OUTPUT);
-}
+  pinMode(MOTOR_B_PWM, OUTPUT);
+  pinMode(MOTOR_B_DIR, OUTPUT);
+  pinMode(SLEEP_DRV, OUTPUT);
 
-void motorForward(uint8_t pwm) {
-  digitalWrite(MOTOR_A_DIR, LOW);
-  analogWrite(MOTOR_A_PWM, pwm);
-}
+  digitalWrite(SLEEP_DRV, HIGH); // Wake up driver
 
-void motorStop() {
-  analogWrite(MOTOR_A_PWM, 0);
-}
-
-void parseSerial() {
-  if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
-    cmd.trim();
-
-    if (cmd.startsWith("PWM ")) {
-      pwmVal = cmd.substring(4).toInt();
-      Serial.print(F("Set PWM to "));
-      Serial.println(pwmVal);
-    } else if (cmd.startsWith("ON ")) {
-      onTime = cmd.substring(3).toInt();
-      Serial.print(F("Set ON time to "));
-      Serial.println(onTime);
-    } else if (cmd.startsWith("OFF ")) {
-      offTime = cmd.substring(4).toInt();
-      Serial.print(F("Set OFF time to "));
-      Serial.println(offTime);
-    } else if (cmd.startsWith("GO")) {
-      Serial.println(F("Running motor..."));
-      motorForward(pwmVal);
-      delay(onTime);
-      motorStop();
-      delay(offTime);
-    }
-  }
-}
-
-void setup() {
   Serial.begin(115200);
-  setupMotorPins();
-  Serial.println(F("Feeder Test Ready. Send 'GO' to run."));
+  delay(1000); // Give serial time to start
+  Serial.println(F("Starting motor test..."));
 }
 
 void loop() {
-  parseSerial();
+  // --- Motor A (Feed) Forward ---
+  Serial.println(F("Motor A: FORWARD"));
+  digitalWrite(MOTOR_A_DIR, LOW);
+  analogWrite(MOTOR_A_PWM, DEFAULT_PWM);
+  delay(1000);
+
+  // Reverse
+  Serial.println(F("Motor A: REVERSE"));
+  digitalWrite(MOTOR_A_DIR, HIGH);
+  analogWrite(MOTOR_A_PWM, DEFAULT_PWM);
+  delay(1000);
+
+  analogWrite(MOTOR_A_PWM, 0);
+  Serial.println(F("Motor A: STOPPED"));
+
+  // --- Motor B (Peel) Forward ---
+  Serial.println(F("Motor B: FORWARD"));
+  digitalWrite(MOTOR_B_DIR, LOW);
+  analogWrite(MOTOR_B_PWM, DEFAULT_PWM);
+  delay(1000);
+
+  // Reverse
+  Serial.println(F("Motor B: REVERSE"));
+  digitalWrite(MOTOR_B_DIR, HIGH);
+  analogWrite(MOTOR_B_PWM, DEFAULT_PWM);
+  delay(1000);
+
+  analogWrite(MOTOR_B_PWM, 0);
+  Serial.println(F("Motor B: STOPPED"));
+
+  delay(1000); // Pause between cycles
 }
