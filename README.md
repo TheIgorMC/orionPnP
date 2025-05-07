@@ -48,20 +48,21 @@ Just the features a PnP machine needs — nothing more.
 - 1x **12V vacuum pump output**, with back EMF protection
 
 ### Power & Expandability
-- 12V, 24V, and 5V power rails with onboard buck converters
+- 24V input, 12V and 5V power rails with onboard buck converters
 - 2x **2-pin fan headers** (selectable 5V or 12V)
 - 1x **4-pin PC fan header** (12V only, non-PWM)
 - Automotive-style fuses for 5V and 12V outputs
 
 ### Sensing
-- 2x **I²C differential pressure sensors** (one per nozzle or pump)
+- 2x **I²C differential pressure sensors** (one per nozzle)
 - Each sensor is isolated on its own I²C bus
 
 ### USB & Connectivity
 - Integrated **USB 3.0 hub**
   - 3x downstream USB 2.0 ports
+  - 1x direct stream to the MCU
   - USB 3.0 Type-B upstream port
-  - One port is reserved for **future expansion (e.g., feeder programming)**
+  - One port is reserved for a **feeder expansion board**
 
 ---
 
@@ -91,16 +92,16 @@ More details in the [Feeder Design](./Feeder-Design) and [Command Reference](./O
 
 ---
 
-## Host Interface (Optional)
+## Host Interface
 
-An optional **host controller** can manage feeders independently of the mainboard.  
+An **host controller** can manage feeders independently of the mainboard.  
 It supports:
 - Multi-line RS485 management
 - Address assignment via screen + encoder
 - OLED feedback and status display
 - USB communication to PC or Marlin
 
-Designed around the **STM32F072** or **ATmega32U4**, as described in the [Software Overview](./Software-Overview).
+Designed around the **STM32F072** as described in the [Software Overview](./Software-Overview).
 
 ---
 
