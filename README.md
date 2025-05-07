@@ -2,34 +2,38 @@
 
 ![Banner for OrionPnP](/assets/banner01.png)
 
-> ⚠️ **DISCLAIMER:** This is still a prototype. Testing and validation will begin after the first boards are assembled. Modifications to schematic, PCB, and BOM may still occur.
+> ⚠️ **DISCLAIMER:** OrionPnP is a prototype under active development. Testing and validation will begin after the first boards are fully assembled. Schematic, PCB, and BOM details may still change. Refer to the [Changelog](./Changelog) and [Build Your Own](./Build-Your-Own) pages for updates.
 
 ---
 
 ## What is OrionPnP?
 
-**OrionPnP** is a DIY Pick-and-Place (PnP) machine project designed to work with [OpenPnP](http://openpnp.org).  
-The goal is to reliably place at least 0402-sized components with minimal user intervention — affordably and effectively.
+**OrionPnP** is an open-source DIY Pick-and-Place (PnP) machine designed to integrate seamlessly with [OpenPnP](http://openpnp.org).  
+The goal is to reliably place at least **0402 components**, while minimizing complexity and user effort — affordably and efficiently.
 
 ---
 
 ## Why This Project?
 
-Most DIY PnP machines out there are either:
+Most DIY PnP machines today are either:
 - Too expensive
-- Too compromised
+- Too unreliable
+- Or both
 
-OrionPnP aims to be the "**minimum effort** for maximum reliability" solution — an accessible, no-nonsense PnP platform that just works.
+**OrionPnP** takes a different path: _“minimum effort for maximum reliability.”_  
+This means fewer parts, cleaner electronics, and a streamlined build process — optimized for consistent, precise assembly.
 
 ---
 
 ## Why a Custom Mainboard?
 
-Existing boards (like 3D printer boards) are:
-- Often overpriced
-- Packed with features not needed in PnP machines (e.g., CAN, excessive IO)
+Generic motion control boards (like 3D printer boards):
+- Often include features irrelevant to PnP (e.g., CAN, multiple extruder support)
+- Lack native support for vacuum sensing or multiple solenoids
+- Are either too limited, too bloated, or too expensive
 
-So OrionPnP introduces a dedicated controller that only includes **what’s actually needed** for a PnP machine.
+**OrionPnP introduces a purpose-built controller**:  
+Just the features a PnP machine needs — nothing more.
 
 ---
 
@@ -37,88 +41,115 @@ So OrionPnP introduces a dedicated controller that only includes **what’s actu
 
 ![Render of the mainboard](/assets/RenderBoardV2a.png)
 
-### 🔧 Motion & Control
-- 6x **TMC2226 stepper drivers** (with sensorless homing & UART)
-- 4x 12V **solenoid outputs** (with flyback diodes)
-- 2x 12V **LED ring outputs** (for cameras)
-- 1x 12V **vacuum pump output** (with protection)
+### Motion & Control
+- 6x **TMC2226 stepper drivers** with sensorless homing and UART control
+- 4x **12V solenoid outputs** (flyback diodes pre-installed)
+- 2x **12V LED ring outputs** for bottom and nozzle cameras
+- 1x **12V vacuum pump output**, with back EMF protection
 
-### 🔌 Power & Expandability
-- Multiple 24V / 12V / 5V headers for accessories
+### Power & Expandability
+- 12V, 24V, and 5V power rails with onboard buck converters
 - 2x **2-pin fan headers** (selectable 5V or 12V)
-- 1x **4-pin PC fan header** (12V, no PWM)
-- Compact **12V & 5V buck modules** onboard
-- Fused 5V and 12V rails (automotive fuses)
+- 1x **4-pin PC fan header** (12V only, non-PWM)
+- Automotive-style fuses for 5V and 12V outputs
 
-### 📡 Sensing
-- 2x **I2C differential pressure sensors** for vacuum detection  
-  (Each on its own isolated bus)
+### Sensing
+- 2x **I²C differential pressure sensors** (one per nozzle or pump)
+- Each sensor is isolated on its own I²C bus
 
-### 🔗 Connectivity
-- Integrated **USB 3.0 Hub**
-  - 3x downstream USB2.0 high-speed ports
-  - USB3.0 Type-B connector for PC interface
-  - One port reserved for future **feeder board**
+### USB & Connectivity
+- Integrated **USB 3.0 hub**
+  - 3x downstream USB 2.0 ports
+  - USB 3.0 Type-B upstream port
+  - One port is reserved for **future expansion (e.g., feeder programming)**
 
 ---
 
 ## Software Approach
 
-OrionPnP runs a **custom Marlin 2.0 firmware**, chosen for:
-- Familiarity and flexibility
-- Good support in OpenPnP with minor tweaks
+The mainboard runs a **customized Marlin 2.0 build**, chosen for:
+- Mature GCODE support
+- Existing OpenPnP compatibility
+- Flexibility and ease of expansion
 
-While some features still need implementation, most of the system will follow the mainline Marlin structure for maintainability.
+Current modifications include:
+- Vacuum sensor hooks
+- Solenoid and pump control
+- LED and GPIO support for pick-and-place automation
 
-OpenPnP profiles and macros will be published once hardware validation begins.
+More firmware integration details are covered in the [Software Overview](./Software-Overview).
+
+---
+
+## Modular Feeder System
+
+OrionPnP includes a distributed architecture of **smart feeders**, connected via RS485.  
+Each feeder has its own microcontroller, optical sensors, and a command queue system.  
+Feeders are assigned addresses automatically and can be hot-plugged or programmed via a dedicated interface.
+
+More details in the [Feeder Design](./Feeder-Design) and [Command Reference](./OrionProtocol) pages.
+
+---
+
+## Host Interface (Optional)
+
+An optional **host controller** can manage feeders independently of the mainboard.  
+It supports:
+- Multi-line RS485 management
+- Address assignment via screen + encoder
+- OLED feedback and status display
+- USB communication to PC or Marlin
+
+Designed around the **STM32F072** or **ATmega32U4**, as described in the [Software Overview](./Software-Overview).
 
 ---
 
 ## Project Scope
 
-The **Core board** is ready for prototyping.  
-The rest of the project (feeders, mechanics, etc.) will follow after successful validation.
+The core mainboard is in active prototyping.  
+Feeder electronics and mechanics are now being finalized.  
+CAD files, firmware, schematics, and wiring diagrams will all be published under open-source licenses.
 
-Everything — CAD, firmware, configurations — will be **open source**.
-
----
-
-## 💬 Contributing
-
-You're welcome to:
-- Fork, test, and explore the project
-- Report bugs or hardware issues
-- Contribute improvements
-
-Just be sure to sync with the repo before making large changes — things are moving fast!
+For a breakdown of parts and required tools, see [Build Your Own](./Build-Your-Own).
 
 ---
 
-## 🚧 TESTING HAS STARTED!
-
-Big thanks to the **OSHWLab Stars initiative** for helping kick this off 🎉
+## Testing Status
 
 ![Image of the first soldered board](assets/RealBoardV1b.jpg)
 
 ### ✅ Power
-All rails work great! A datasheet misread caused an early issue, but it's now fixed and added to the schematic.
+All rails have been verified. A minor datasheet misread caused an issue on the first version, but has since been corrected in v02.
 
 ### ⚠️ USB
-Minor flaws were discovered in the USB hub design.
-- Hardware patching allowed testing to continue
-- v02 will include a more reliable package and layout
-- USB stability testing is still ongoing
+Initial USB hub issues were identified:
+- Patched for testing
+- New hub package selected for v02
+- USB3.0 to USB2.0 compatibility still being validated
 
-### ✅ MCU
-- Flashes fine and runs reliably
-- Custom Marlin firmware compiles and uploads correctly
-- GCODE is being read and interpreted correctly
+### ✅ MCU & Firmware
+- Firmware flashes and executes without issue
+- Custom Marlin build compiles cleanly
+- GCODE interpreted and processed reliably
 
 ### ⏳ Pending Tests
-- Solenoid, pump, LED outputs
-- Vacuum sensors
-- Full IO test suite once i get motors to test the drivers with (and heatsinks)
+- Solenoid, pump, and LED output loads
+- Pressure sensor I²C polling
+- Driver thermal testing under motion load
+- Full I/O suite with real motors and heatsinks
 
 ---
 
-Stay tuned for updates on the feeders, mechanical parts, and full assembly instructions!
+## Contributions Welcome
+
+OrionPnP is a community-first project.  
+Feel free to:
+- Fork the repo
+- Suggest improvements
+- Report bugs or build issues
+
+Please check with maintainers before starting large changes — the design is evolving rapidly.
+
+---
+
+Stay tuned for updates on feeder programming, mechanical parts, and complete assembly instructions.
