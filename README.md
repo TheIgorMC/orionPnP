@@ -2,7 +2,7 @@
 
 ![Banner for OrionPnP](/assets/banner01.png)
 
-> ⚠️ **DISCLAIMER:** OrionPnP is a prototype under active development. Testing and validation will begin after the first boards are fully assembled. Schematic, PCB, and BOM details may still change. Refer to the [Changelog](./Changelog) and [Build Your Own](./Build-Your-Own) pages for updates.
+> ⚠️ **DISCLAIMER:** OrionPnP is a prototype under active development. Testing and validation will begin after the first boards are fully assembled. Schematic, PCB, and BOM details may still change. Refer to the [Changelog](../../wiki/Changelog) and [Build Your Own](../../wiki/Build-Your-Own) pages for updates.
 
 ---
 
@@ -10,6 +10,8 @@
 
 **OrionPnP** is an open-source DIY Pick-and-Place (PnP) machine designed to integrate seamlessly with [OpenPnP](http://openpnp.org).  
 The goal is to reliably place at least **0402 components**, while minimizing complexity and user effort — affordably and efficiently.
+
+---
 
 ## Why This Project?
 
@@ -35,6 +37,7 @@ Generic motion control boards (like 3D printer boards):
 **OrionPnP introduces a purpose-built controller**:  
 Just the features a PnP machine needs — nothing more.
 
+---
 
 ## Key Features
 
@@ -77,7 +80,7 @@ Current modifications include:
 - Solenoid and pump control
 - LED and GPIO support for pick-and-place automation
 
-More firmware integration details are covered in the [Software Overview](./Software-Overview).
+More firmware integration details are covered in the [Software Overview](../../wiki/Software-Overview).
 
 ---
 
@@ -87,20 +90,20 @@ OrionPnP includes a distributed architecture of **smart feeders**, connected via
 Each feeder has its own microcontroller, optical sensors, and a command queue system.  
 Feeders are assigned addresses automatically and can be hot-plugged or programmed via a dedicated interface.
 
-More details in the [Feeder Design](./Feeder-Design) and [Command Reference](./OrionProtocol) pages.
+See [Feeder Design](../../wiki/Feeder-Design) and [Command Reference](../../wiki/OrionProtocol) for full details.
 
 ---
 
 ## Host Interface
 
-An **host controller** can manage feeders independently of the mainboard.  
+A **host controller** can manage feeders independently of the mainboard.  
 It supports:
 - Multi-line RS485 management
 - Address assignment via screen + encoder
 - OLED feedback and status display
-- USB communication to openPnP
-  
-Designed around the **STM32F072** as described in the [Software Overview](./Software-Overview).
+- USB communication to OpenPnP
+
+Typically based on the **STM32F072**, as described in the [Software Overview](../../wiki/Software-Overview).
 
 ---
 
@@ -110,7 +113,7 @@ The core mainboard is in active prototyping.
 Feeder electronics and mechanics are now being finalized.  
 CAD files, firmware, schematics, and wiring diagrams will all be published under open-source licenses.
 
-For a breakdown of parts and required tools, see [Build Your Own](./Build-Your-Own).
+See [Build Your Own](../../wiki/Build-Your-Own) for parts list, tools, and assembly tips.
 
 ---
 
@@ -125,7 +128,7 @@ All rails have been verified. A minor datasheet misread caused an issue on the f
 Initial USB hub issues were identified:
 - Patched for testing
 - New hub package selected for v02
-- USB3.0 to USB2.0 compatibility still being validated
+- USB 3.0 to 2.0 compatibility still under evaluation
 
 ### ✅ MCU & Firmware
 - Firmware flashes and executes without issue
@@ -148,8 +151,8 @@ Feel free to:
 - Suggest improvements
 - Report bugs or build issues
 
-Please check with maintainers before starting large changes — the design is evolving rapidly.
+Please check in before large architectural changes — development is moving fast.
 
 ---
 
-Stay tuned for updates on feeder programming, mechanical parts, and complete assembly instructions.
+Stay tuned for updates on feeder programming, mechanical parts, and full assembly instructions.
