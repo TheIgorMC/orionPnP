@@ -11,8 +11,6 @@
 **OrionPnP** is an open-source DIY Pick-and-Place (PnP) machine designed to integrate seamlessly with [OpenPnP](http://openpnp.org).  
 The goal is to reliably place at least **0402 components**, while minimizing complexity and user effort — affordably and efficiently.
 
----
-
 ## Why This Project?
 
 Most DIY PnP machines today are either:
@@ -22,6 +20,8 @@ Most DIY PnP machines today are either:
 
 **OrionPnP** takes a different path: _“minimum effort for maximum reliability.”_  
 This means fewer parts, cleaner electronics, and a streamlined build process — optimized for consistent, precise assembly.
+
+As of now, a complete OrionPnP machine (including electronics, mechanics, and **five assembled feeders**) is expected to cost around **800 EUR**, excluding printed parts. This makes it one of the most affordable fully-featured PnP options available.
 
 ---
 
@@ -35,7 +35,6 @@ Generic motion control boards (like 3D printer boards):
 **OrionPnP introduces a purpose-built controller**:  
 Just the features a PnP machine needs — nothing more.
 
----
 
 ## Key Features
 
@@ -99,8 +98,8 @@ It supports:
 - Multi-line RS485 management
 - Address assignment via screen + encoder
 - OLED feedback and status display
-- USB communication to PC or Marlin
-
+- USB communication to openPnP
+  
 Designed around the **STM32F072** as described in the [Software Overview](./Software-Overview).
 
 ---
