@@ -10,8 +10,8 @@ The OrionPnP mechanical design is built around modularity and printability. It i
 
 The CAD models are designed with:
 - **Fusion 360** as the main parametric environment
-- STL exports for printing
-- A BOM covering all fasteners and support components
+- STL exports for printing (3MF is gradually being added)
+- A BOM covering all fasteners and support components, alongside the list of 3D printed components
 
 ---
 
@@ -19,18 +19,17 @@ The CAD models are designed with:
 
 | File/Folder        | Description                                             |
 |--------------------|---------------------------------------------------------|
-| `/STLs/`           | Exported 3D printable parts (mounts, brackets, etc.)    |
-| `/STEP/`           | Neutral-format STEP files for external CAD use          |
+| `/Feeders/`        | Exported 3D files for feeders (M3F + STL)               |
+| `/OrionPnP/`       | Exported 3D files for the machine (STL)                 |
 | `OrionPnP_Main.f3d`| Main Fusion 360 assembly file (WIP)                     |
-| `OrionPnP_BOM.md`  | Human-readable Bill of Materials                        |
-| `OrionPnP_BOM.csv` | BOM spreadsheet (for sourcing or BOM tools)             |
+| `Hardware BOM.ods` | BOM spreadsheet (for components and 3D printed parts)   |
+| `TEMP_BOM.md`      | Temporary Markdown file for quick BOM consultation      |
 
 ---
 
 ## Notes
 
-- The current design targets a compact V-slot or Prusa-style frame
-- Feeder and programmer jigs are sized for standard feeder PCBs
+- Printed parts **should** be printable with smaller printers (e.g. Prusa Mini)
 - STL exports are named by part function for easier identification
 - Most parts are designed for **0.4mm nozzle, 0.2mm layer height**
 
@@ -49,10 +48,11 @@ A CSV version is also available for importing into sourcing platforms.
 
 ## Printing Recommendations
 
-- Material: **PETG** or **PLA+** recommended for most parts
+- Material: **ABS/ASA** or **PETG** recommended for most parts
+- Color: not relevant except for camera mounts (preferable black + white diffuser)
 - Infill: 30–50% for structural components
 - Supports: Only required for a few overhangs (noted per part)
-- Use heat-set inserts for repeated fastening when possible
+- Use heat-set inserts for repeated fastening when indicated
 
 ---
 
