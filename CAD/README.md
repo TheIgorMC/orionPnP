@@ -31,18 +31,16 @@ The CAD models are designed with:
 
 - Printed parts **should** be printable with smaller printers (e.g. Prusa Mini)
 - STL exports are named by part function for easier identification
-- Most parts are designed for **0.4mm nozzle, 0.2mm layer height**
+- Most parts are designed for **0.6mm nozzle, 0.2mm layer height**
 
 ---
 
 ## Bill of Materials
 
-The [OrionPnP_BOM.md](./OrionPnP_BOM.md) file contains a full breakdown of:
+The [TEMP_BOM.md](./TEMP_BOM.md) file contains a full breakdown of:
 - Printed parts
 - Hardware (screws, nuts, spacers, etc.)
 - Optional assembly tools and adhesives
-
-A CSV version is also available for importing into sourcing platforms.
 
 ---
 
