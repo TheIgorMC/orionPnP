@@ -1,0 +1,324 @@
+connectors:
+
+  LED_CON:
+    pincount: 2
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  LED_HEAD:
+    pincount: 2
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  END_CON:
+    pincount: 2
+    type: JST
+    subtype: XH, female
+    notes: Endstop/unpopul.
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  END_HEAD:
+    pincount: 2
+    type: JST
+    subtype: XH, female
+    notes: Endstop/unpopul.
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  USB_CON:
+    pincount: 4
+    type: USB
+    subtype: A, male
+
+  USB_HEAD:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated 
+
+  MOTOR_L_CON:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated  
+
+  MOTOR_L_HEAD:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated  
+
+  MOTOR_R_CON:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated   
+
+  MOTOR_R_HEAD:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated   
+
+  MOTOR_Z_CON:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  MOTOR_Z_HEAD:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  MOTOR_X_CON:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  MOTOR_X_PLUG:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  MOTOR_Y1_CON:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  MOTOR_Y1_PLUG:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  MOTOR_Y2_CON:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  MOTOR_Y2_PLUG:
+    pincount: 4
+    type: JST
+    subtype: XH, female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  IEC_N:
+    style: simple
+    type: Faston
+    color: BL
+
+  IEC_P:
+    style: simple
+    type: Faston
+    color: BR
+
+  IEC_PE:
+    style: simple
+    type: Faston
+    color: GNYE
+  
+  PSU_N:
+    style: simple
+    type: Spade
+    color: BL
+
+  PSU_P:
+    style: simple
+    type: Spade
+    color: BR
+
+  PSU_PE:
+    style: simple
+    type: Spade
+    color: GNYE
+
+  FRAME_PE:
+    style: simple
+    type: Ring crimp
+    color: GNYE
+
+cables:
+  W_CAM_HEAD: &RSVP
+    wirecount: 4
+    length: 2.60
+    gauge: 24 AWG
+    colors: [RD, YE, GN, BK]
+    shield: true
+    notes: Cable from head camera to Core
+
+  W_CAM_BOT:
+    <<: *RSVP
+    length: 0.15
+    shield: true
+    notes: Cable from bottom camera to Core
+
+  W_HEAD_R: &SUPERTRONIC
+    wirecount: 4
+    length: 2.60
+    gauge: 22 AWG
+    color_code: DIN
+
+  W_HEAD_L:
+    <<: *SUPERTRONIC
+    length: 2.60
+
+  W_Z:
+    <<: *SUPERTRONIC
+
+  W_LED:
+    <<: *SUPERTRONIC
+
+  W_X:
+    <<: *SUPERTRONIC
+    length: 1.85
+
+  W_Y1:
+    <<: *SUPERTRONIC
+    length: 0.85
+
+  W_Y2:
+    <<: *SUPERTRONIC
+    length: 0.45
+
+  W_MAINS:
+    wirecount: 3
+    length: 0.28
+    gauge: 18 AWG
+    colors: [BL, BR, GNYE]
+
+  W_PE:
+    wirecount: 1
+    length: 0.10
+    gauge: 18 AWG
+    color: GNYE
+
+connections:
+
+  -
+    - IEC_N: [1]
+    - W_MAINS: [1]
+    - PSU_N: [1]
+
+  -
+    - IEC_P: [1]
+    - W_MAINS: [2]
+    - PSU_P: [1]
+
+  - 
+    - IEC_PE: [1]
+    - W_MAINS: [3]
+    - PSU_PE: [1]
+
+  -
+    - IEC_PE: [1]
+    - W_PE: [1]
+    - FRAME_PE: [1]
+
+  -
+    - LED_HEAD: [1, 2]
+    - W_LED: [1, 2]
+    - LED_CON: [1, 2]
+
+  -
+    - END_HEAD: [1, 2]
+    - W_LED: [3, 4]
+    - END_CON: [1, 2]
+
+  -
+    - USB_HEAD: [1-4]
+    - W_CAM_HEAD: [1-4]
+    - USB_CON: [1-4]
+
+  -
+    - W_CAM_HEAD: s
+    - USB_CON: 4
+
+  -
+    - MOTOR_L_HEAD: [1-4]
+    - W_HEAD_L: [1-4]
+    - MOTOR_L_CON: [1-4]
+
+  -
+    - MOTOR_R_HEAD: [1-4]
+    - W_HEAD_R: [1-4]
+    - MOTOR_R_CON: [1-4]
+
+  - 
+    - MOTOR_Z_HEAD: [1-4]
+    - W_Z: [1-4]
+    - MOTOR_Z_CON: [1-4]
+
+  -
+    - MOTOR_X_PLUG: [1-4]
+    - W_X: [1-4]
+    - MOTOR_X_CON: [1-4]
+
+  -
+    - MOTOR_Y1_PLUG: [1-4]
+    - W_Y1: [1-4]
+    - MOTOR_Y1_CON: [1-4]
+
+  -
+    - MOTOR_Y2_PLUG: [1-4]
+    - W_Y2: [1-4]
+    - MOTOR_Y2_CON: [1-4]
+
+  

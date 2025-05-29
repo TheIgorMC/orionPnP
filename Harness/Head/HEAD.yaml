@@ -1,0 +1,125 @@
+connectors:
+  LED_PCB:
+    pincount: 2
+    notes: this is the PCB of the LED ring
+
+  USB_CAM:
+    pinlabels: [5V, D+, D-, GND]
+    notes: this is the USB camera connector
+
+  MOTOR_L:
+    pinlabels: [A+, A-, B+, B-]
+  MOTOR_R:
+    pinlabels: [A+, A-, B+, B-]
+  MOTOR_Z:
+    pinlabels: [A+, A-, B+, B-]
+
+  LED_CON:
+    pincount: 2
+    type: JST XH
+    subtype: female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+
+  USB_CON:
+    pincount: 4
+    type: JST XH
+    subtype: female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+    
+  MOTOR_L_CON:
+    pincount: 4
+    type: JST XH
+    subtype: female  
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated  
+  MOTOR_R_CON:
+    pincount: 4
+    type: JST XH
+    subtype: female 
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated   
+  MOTOR_Z_CON:
+    pincount: 4
+    type: JST XH
+    subtype: female
+    additional_components:
+      - type: Crimp
+        subtype: SXH-001T-P0.6, 22-28 AWG 
+        qty_multiplier: populated
+    
+
+
+cables:
+  W_USB: &RSVP
+    wirecount: 4
+    length: 0.23
+    gauge: 24 AWG
+    colors: [RD, YE, GN, BK]
+    shield: true
+    notes: this is the cable for the USB connector
+
+  W_HEAD_R: &SUPERTRONIC
+    wirecount: 4
+    length: 0.26
+    gauge: 22 AWG
+    color_code: DIN
+    
+  W_HEAD_L:
+    <<: *SUPERTRONIC
+
+  W_Z:
+    <<: *SUPERTRONIC
+    length: 0.08
+
+  W_LED:
+    category: bundle
+    length: 0.22
+    gauge: 24 AWG
+    colors: [RD,BK]
+    additional_components:
+      - type: Heatshrink
+        subtype: Black or tone-on-tone
+        qty_multiplier: length
+        unit: m
+
+
+
+connections:
+  -
+    - LED_PCB: [1-2]
+    - W_LED: [1-2]
+    - LED_CON: [1-2]
+
+  -
+    - USB_CAM: [1-4]
+    - W_USB: [1-4]
+    - USB_CON: [1-4]
+
+  -
+    - W_USB: s
+    - USB_CON: 4
+
+  - 
+    - MOTOR_L: [1-4]
+    - W_HEAD_R: [1-4]
+    - MOTOR_L_CON: [1-4]
+
+  -
+    - MOTOR_R: [1-4]
+    - W_HEAD_L: [1-4]
+    - MOTOR_R_CON: [1-4]
+
+  - 
+    - MOTOR_Z: [1-4]
+    - W_Z: [1-4]
+    - MOTOR_Z_CON: [1-4]

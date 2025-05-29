@@ -1,0 +1,16 @@
+Id	Description	Qty	Unit	Designators
+1	Cable, 1 x 18 AWG, GNYE	0.1	m	W_PE
+2	Cable, 3 x 18 AWG	0.28	m	W_MAINS
+3	Cable, 4 x 22 AWG	13.55	m	W_HEAD_L, W_HEAD_R, W_LED, W_X, W_Y1, W_Y2, W_Z
+4	Cable, 4 x 24 AWG shielded	2.6	m	W_CAM_HEAD
+5	Connector, Faston, BL	1		
+6	Connector, Faston, BR	1		
+7	Connector, Faston, GNYE	1		
+8	Connector, JST, XH, female, 2 pins	4		END_CON, END_HEAD, LED_CON, LED_HEAD
+9	Connector, JST, XH, female, 4 pins	13		MOTOR_L_CON, MOTOR_L_HEAD, MOTOR_R_CON, MOTOR_R_HEAD, MOTOR_X_CON, MOTOR_X_PLUG, MOTOR_Y1_CON, MOTOR_Y1_PLUG, MOTOR_Y2_CON, MOTOR_Y2_PLUG, MOTOR_Z_CON, MOTOR_Z_HEAD, USB_HEAD
+10	Connector, Ring crimp, GNYE	1		
+11	Connector, Spade, BL	1		
+12	Connector, Spade, BR	1		
+13	Connector, Spade, GNYE	1		
+14	Connector, USB, A, male, 4 pins	1		USB_CON
+15	Crimp, SXH-001T-P0.6, 22-28 AWG	60		END_CON, END_HEAD, LED_CON, LED_HEAD, MOTOR_L_CON, MOTOR_L_HEAD, MOTOR_R_CON, MOTOR_R_HEAD, MOTOR_X_CON, MOTOR_X_PLUG, MOTOR_Y1_CON, MOTOR_Y1_PLUG, MOTOR_Y2_CON, MOTOR_Y2_PLUG, MOTOR_Z_CON, MOTOR_Z_HEAD, USB_HEAD

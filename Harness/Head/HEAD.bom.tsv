@@ -1,0 +1,11 @@
+Id	Description	Qty	Unit	Designators
+1	Cable, 4 x 22 AWG	0.6	m	W_HEAD_L, W_HEAD_R, W_Z
+2	Cable, 4 x 24 AWG shielded	0.23	m	W_USB
+3	Connector, 2 pins	1		LED_PCB
+4	Connector, 4 pins	4		MOTOR_L, MOTOR_R, MOTOR_Z, USB_CAM
+5	Connector, JST XH, female, 2 pins	1		LED_CON
+6	Connector, JST XH, female, 4 pins	4		MOTOR_L_CON, MOTOR_R_CON, MOTOR_Z_CON, USB_CON
+7	Crimp, SXH-001T-P0.6, 22-28 AWG	18		LED_CON, MOTOR_L_CON, MOTOR_R_CON, MOTOR_Z_CON, USB_CON
+8	Heatshrink, Black or tone-on-tone	0.22	m	W_LED
+9	Wire, 24 AWG, BK	0.22	m	W_LED
+10	Wire, 24 AWG, RD	0.22	m	W_LED
