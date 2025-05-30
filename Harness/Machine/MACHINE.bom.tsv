@@ -1,6 +1,6 @@
 Id	Description	Qty	Unit	Designators
 1	Cable, 1 x 18 AWG	0.1	m	W_PE
-2	Cable, 2 x 18 AWG	0.2	m	W_PWRIN
+2	Cable, 2 x 15 AWG	0.2	m	W_PWRIN
 3	Cable, 3 x 18 AWG	0.28	m	W_MAINS
 4	Cable, 4 x 22 AWG	15.19	m	W_FEEDERS_PWR, W_HEAD_L, W_HEAD_R, W_LED, W_LEDBOT, W_PUMP, W_SOL_BLO, W_SOL_VAC, W_X, W_Y1, W_Y2, W_Z
 5	Cable, 4 x 24 AWG shielded	3.5	m	W_CAM_BOT, W_CAM_HEAD, W_FEEDERS

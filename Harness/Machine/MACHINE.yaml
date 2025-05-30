@@ -355,7 +355,7 @@ cables:
   W_PWRIN:
     wirecount: 2
     length: 0.20
-    gauge: 18 AWG
+    gauge: 15 AWG
     colors: [RD, BK]
     notes: Power input to board
 
