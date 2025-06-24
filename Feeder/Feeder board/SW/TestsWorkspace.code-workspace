@@ -7,6 +7,10 @@
 		{
 			"name": "CustomTest01",
 			"path": "CustomTest01/CustomTest01"
+		},
+		{
+			"name": "ThermSmallV01a",
+			"path": "../../../../ThermSmallV01a"
 		}
 	],
 	"settings": {}
