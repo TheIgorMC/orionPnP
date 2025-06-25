@@ -117,29 +117,13 @@ See [Build Your Own](../../wiki/Build-Your-Own) for parts list, tools, and assem
 
 ---
 
-## Testing Status
+## Project Status
 
-![Image of the first soldered board](assets/RealBoardV1b.jpg)
-
-### ✅ Power
-All rails have been verified. A minor datasheet misread caused an issue on the first version, but has since been corrected in v02.
-
-### ⚠️ USB
-Initial USB hub issues were identified:
-- Patched for testing
-- New hub package selected for v02
-- USB 3.0 to 2.0 compatibility still under evaluation
-
-### ✅ MCU & Firmware
-- Firmware flashes and executes without issue
-- Custom Marlin build compiles cleanly
-- GCODE interpreted and processed reliably
-
-### ⏳ Pending Tests
-- Solenoid, pump, and LED output loads
-- Pressure sensor I²C polling
-- Driver thermal testing under motion load
-- Full I/O suite with real motors and heatsinks
+- [x] CAD design of the frame and motion system
+- [x] Production of electronic boards (Core, camera lights, toolhead boards...)
+- [ ] First tests on electronics (ongoing...)
+- [ ] Part printing (ongoing...)
+- [ ] Manual writing (ongoing...)
 
 ---
 
