@@ -1257,6 +1257,21 @@ private:
     static void M710_report(const bool forReplay=true);
   #endif
 
+  #if ENABLED(HAS_PRESSURE_SENSOR)
+    static void M10001();  // Read pressure nozzle 1
+    static void M10002();  // Read pressure nozzle 2
+
+    static void M10010();  // Bottom cam light ON
+    static void M10011();  // Bottom cam light OFF
+    static void M10012();  // Top cam light ON
+    static void M10013();  // Top cam light OFF
+
+    static void M10020();  // Pump ON
+    static void M10021();  // Pump OFF
+
+    static void M10030();  // Solenoid control: N=1/2, S=0/1
+  #endif
+
   static void T(const int8_t tool_index);
 
 };

@@ -65,6 +65,7 @@ GcodeSuite gcode;
   #include "../feature/password/password.h"
 #endif
 
+
 #if HAS_FANCHECK
   #include "../feature/fancheck.h"
 #endif
@@ -474,7 +475,7 @@ void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
       #if ENABLED(DEBUG_GCODE_PARSER)
         case 800: parser.debug(); break;                          // G800: G-Code Parser Test for G
       #endif
-
+      
       default: parser.unknown_command_warning(); break;
     }
     break;
@@ -1096,6 +1097,24 @@ void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
 
       #if ENABLED(HAS_MCP3426_ADC)
         case 3426: M3426(); break;                                // M3426: Read MCP3426 ADC (over i2c)
+      #endif
+
+      #if ENABLED(HAS_PRESSURE_SENSOR)
+
+        case 10001: M10001(); break;                            // M10001: Read Pressure Sensor 1
+        case 10002: M10002(); break;                            // M10002: Read Pressure Sensor 2
+
+        case 10010: M10010(); break;                            // M10010: bottom cam light ON
+        case 10011: M10011(); break;                            // M10011: bottom cam light OFF
+        case 10012: M10012(); break;                            // M10012: top cam light ON
+        case 10013: M10013(); break;                            // M10013: top cam light OFF
+
+        case 10020: M10020(); break;                            // M10020: turn pump ON
+        case 10021: M10021(); break;                            // M10021: turn pump OFF
+        
+        case 10030: M10030(); break;                            // M10030: edit solenoid H1/2 S1/0
+
+        
       #endif
 
       default: parser.unknown_command_warning(); break;
