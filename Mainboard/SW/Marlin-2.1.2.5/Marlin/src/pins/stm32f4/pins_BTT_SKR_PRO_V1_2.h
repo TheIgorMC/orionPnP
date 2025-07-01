@@ -42,5 +42,6 @@
 #define PIN_SOL3           (3 * 16 + 12)  // PD12 = 60
 #define PIN_SOL4           (3 * 16 + 11)  // PD11 = 59
 
-
 #include "pins_BTT_SKR_PRO_common.h"
+
+#include "C:\Users\Mattia\Documents\GitHub\orionPnP\Mainboard\SW\Marlin-2.1.2.5\Marlin\src\gcode\feature\orion\orionPnP_codes.h"

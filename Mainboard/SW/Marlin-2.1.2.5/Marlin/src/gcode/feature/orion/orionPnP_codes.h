@@ -65,4 +65,18 @@ void GcodeSuite::M10011() {
     SERIAL_ECHOLNPGM("Bottom cam light OFF");
 }
 
+// M10012: Top cam light ON
+void GcodeSuite::M10012() {
+    pinMode(PIN_LED2, OUTPUT);
+    digitalWrite(PIN_LED2, HIGH);
+    SERIAL_ECHOLNPGM("Top cam light ON");
+}
+
+// M10013: Top cam light OFF
+void GcodeSuite::M10013() {
+    pinMode(PIN_LED2, OUTPUT);
+    digitalWrite(PIN_LED2, LOW);
+    SERIAL_ECHOLNPGM("Top cam light OFF");
+}
+
 #endif
