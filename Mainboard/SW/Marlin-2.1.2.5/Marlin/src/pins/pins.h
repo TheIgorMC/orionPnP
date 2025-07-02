@@ -746,6 +746,9 @@
   #include "stm32f4/pins_TRONXY_CXY_446_V10.h"      // STM32F4                              env:TRONXY_CXY_446_V10 env:TRONXY_CXY_446_V10_usb_flash_drive
 #elif MB(CREALITY_F401RE)
   #include "stm32f4/pins_CREALITY_F401.h"           // STM32F4                              env:STM32F401RE_creality
+#elif MB(ORIONPNP_CORE_V02)
+  #include "stm32f4/pins_OrionPnP_Core_V02.h"       // STM32F4     
+
 
 //
 // ARM Cortex-M7

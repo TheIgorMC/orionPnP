@@ -88,7 +88,7 @@
 
 // Choose the name from boards.h that matches your setup
 #ifndef MOTHERBOARD
-  #define MOTHERBOARD BOARD_BTT_SKR_PRO_V1_2
+  #define MOTHERBOARD BOARD_ORIONPNP_CORE_V02
 #endif
 
 // @section serial
@@ -264,15 +264,6 @@
                                                     // For Dual Servo use two pairs: { { lower, raise }, { lower, raise } }
   #define SWITCHING_NOZZLE_SERVO_DWELL 2500         // Dwell time to wait for servo to make physical move
 #endif
-
-/**
- * Support for a pressure sensor for PnP (Pick and Place) applications.
- * This sensor can be used to detect the presence of a component on the nozzle.
- */
-#ifndef HAS_PRESSURE_SENSOR
-  #define HAS_PRESSURE_SENSOR true
-#endif
-
 
 /**
  * Two separate X-carriages with extruders that connect to a moving part
