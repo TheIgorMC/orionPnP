@@ -140,3 +140,12 @@ Please check in before large architectural changes — development is moving fas
 ---
 
 Stay tuned for updates on feeder programming, mechanical parts, and full assembly instructions.
+
+---
+
+## Support the Project
+
+If you find OrionPnP useful or want to support its continued development, consider buying me a coffee:
+
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/theigormc)
+
