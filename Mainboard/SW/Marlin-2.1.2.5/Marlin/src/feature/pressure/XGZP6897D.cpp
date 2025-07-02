@@ -91,7 +91,4 @@
     return true;
     }
 
-
-XGZP6897D sensor;
-
 #endif // HAS_PRESSURE_SENSOR

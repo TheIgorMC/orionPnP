@@ -1112,6 +1112,7 @@ void GcodeSuite::process_parsed_command(const bool no_ok/*=false*/) {
         case 10021: M10021(); break;                            // M10021: turn pump OFF
         
         case 10030: M10030(); break;                            // M10030: edit solenoid H1/2 S1/0
+        case 10031: M10031(); break;                            // M10031: turn solenoids off
 
         
       #endif

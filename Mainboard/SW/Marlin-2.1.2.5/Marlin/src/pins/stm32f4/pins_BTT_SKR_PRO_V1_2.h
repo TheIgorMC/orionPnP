@@ -27,8 +27,8 @@
 
 #define BOARD_INFO_NAME "BTT SKR Pro V1.2"
 
-#define HAS_PRESSURE_SENSOR
-#define DIRECT_PIN_CONTROL
+
+#define DIRECT_PIN_CONTROL true // Enable direct pin control for M226
 
 // Pin mapping: 0 = PA0, 1 = PA1, ..., 15 = PA15, 16 = PB0, ..., 31 = PB15, ..., 191 = PL15
 

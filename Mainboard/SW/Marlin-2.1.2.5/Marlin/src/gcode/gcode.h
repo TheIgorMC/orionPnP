@@ -1270,6 +1270,7 @@ private:
     static void M10021();  // Pump OFF
 
     static void M10030();  // Solenoid control: N=1/2, S=0/1
+    static void M10031();  // Turn all solenoids OFF    
   #endif
 
   static void T(const int8_t tool_index);

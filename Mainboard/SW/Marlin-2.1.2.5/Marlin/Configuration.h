@@ -266,6 +266,15 @@
 #endif
 
 /**
+ * Support for a pressure sensor for PnP (Pick and Place) applications.
+ * This sensor can be used to detect the presence of a component on the nozzle.
+ */
+#ifndef HAS_PRESSURE_SENSOR
+  #define HAS_PRESSURE_SENSOR true
+#endif
+
+
+/**
  * Two separate X-carriages with extruders that connect to a moving part
  * via a solenoid docking mechanism. Requires SOL1_PIN and SOL2_PIN.
  */
