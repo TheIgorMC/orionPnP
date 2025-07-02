@@ -33,7 +33,7 @@
 void GcodeSuite::M10001() {
   
     float temperature, pressure;
-    XGZP6897D XGZP6897D(2048, &Wire); // K factor for the sensor, see datasheet
+    XGZP6897D XGZP6897D(2048, &TwoWire(PIN_SDA1, PIN_SCL1)); // K factor for the sensor, see datasheet
     XGZP6897D.readSensor(temperature, pressure);
 
     double result = pressure;
@@ -44,7 +44,7 @@ void GcodeSuite::M10001() {
 void GcodeSuite::M10002() {
   
     float temperature, pressure;
-    XGZP6897D XGZP6897D(2048, &Wire1); // K factor for the sensor, see datasheet
+    XGZP6897D XGZP6897D(2048, &TwoWire(PIN_SDA2, PIN_SCL2)); // K factor for the sensor, see datasheet
     XGZP6897D.readSensor(temperature, pressure);
 
     double result = pressure;
@@ -77,6 +77,44 @@ void GcodeSuite::M10013() {
     pinMode(PIN_LED2, OUTPUT);
     digitalWrite(PIN_LED2, LOW);
     SERIAL_ECHOLNPGM("Top cam light OFF");
+}
+
+// M10020: Turn pump ON
+void GcodeSuite::M10020() {
+    pinMode(PIN_PUMP, OUTPUT);
+    digitalWrite(PIN_PUMP, HIGH);
+    SERIAL_ECHOLNPGM("Pump ON");
+}
+
+// M10021: Turn pump OFF
+void GcodeSuite::M10021() {
+    pinMode(PIN_PUMP, OUTPUT);
+    digitalWrite(PIN_PUMP, LOW);
+    SERIAL_ECHOLNPGM("Pump OFF");
+}
+
+// M10030: Edit solenoid H1/2 S1/0
+void GcodeSuite::M10030() {
+    int solenoid = parser.intval('H', 1); // Default to solenoid 1
+    int state = parser.intval('S', 1); // Default to ON
+
+    if (solenoid < 1 || solenoid > 4) {
+        SERIAL_ERRORLNPGM("Invalid solenoid number. Use H1-4.");
+        return;
+    }
+
+    PinName pin;
+    switch (solenoid) {
+        case 1: pin = PIN_SOL1; break;
+        case 2: pin = PIN_SOL2; break;
+        case 3: pin = PIN_SOL3; break;
+        case 4: pin = PIN_SOL4; break;
+    }
+
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, state ? HIGH : LOW);
+    
+    SERIAL_ECHOLNPGM("Solenoid ", solenoid, " set to ", state ? "ON" : "OFF");
 }
 
 #endif

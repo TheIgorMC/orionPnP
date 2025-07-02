@@ -65,7 +65,6 @@ GcodeSuite gcode;
   #include "../feature/password/password.h"
 #endif
 
-
 #if HAS_FANCHECK
   #include "../feature/fancheck.h"
 #endif

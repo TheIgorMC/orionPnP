@@ -32,16 +32,20 @@
 
 // Pin mapping: 0 = PA0, 1 = PA1, ..., 15 = PA15, 16 = PB0, ..., 31 = PB15, ..., 191 = PL15
 
-#define PIN_LED1           (2 * 16 + 8)   // PC8  = 40
-#define PIN_LED2           (4 * 16 + 5)   // PE5  = 69
+#define PIN_LED1           PC_8
+#define PIN_LED2           PE_5
 
-#define PIN_PUMP           (1 * 16 + 1)   // PB1  = 17
+#define PIN_PUMP           PB_1
 
-#define PIN_SOL1           (3 * 16 + 14)  // PD14 = 62
-#define PIN_SOL2           (1 * 16 + 0)   // PB0  = 16
-#define PIN_SOL3           (3 * 16 + 12)  // PD12 = 60
-#define PIN_SOL4           (3 * 16 + 11)  // PD11 = 59
+#define PIN_SOL1           PD_14
+#define PIN_SOL2           PB_0
+#define PIN_SOL3           PD_12
+#define PIN_SOL4           PD_11
+
+#define PIN_SDA1           PB_7
+#define PIN_SCL1           PB_6
+
+#define PIN_SDA2           PB_10
+#define PIN_SCL2           PB_11
 
 #include "pins_BTT_SKR_PRO_common.h"
-
-#include "C:\Users\Mattia\Documents\GitHub\orionPnP\Mainboard\SW\Marlin-2.1.2.5\Marlin\src\gcode\feature\orion\orionPnP_codes.h"
