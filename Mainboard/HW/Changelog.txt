@@ -1,8 +1,17 @@
 [NP] = Not produced
 [NW] = Not working after testing
 
+[0.3a]
+- Switched to dual USB HUB chips for better bandwidth availability
+- Switched to custom SMPS design on-board instead of NID modules
+- Added test points on USB for bypass
+- Added LEDs on 5V and 12V power
+- Schematic now uses logic blocks for MCU and other components
+- Added fuse from IN to buck converters (motors still get 24V directly!)
+- CHANGED DIMENSIONS!!!
 
-[0.2a]
+
+[0.2a] [NP]
 - Changed USB hub chip to VSON variant for better availability
 - Fixed USB hub connections, added capacitors to SSTX and resistor to R1 pin
 - Added filtering RC to GND on USB connectors shells
@@ -15,7 +24,7 @@
 [0.1c] [NP]
 - Fixed capacitor C50 footprint being not visible
 
-[0.1b]
+[0.1b] [NW]
 - Fixed some layout Issues
 - Added 2D matrix for traceability
 
