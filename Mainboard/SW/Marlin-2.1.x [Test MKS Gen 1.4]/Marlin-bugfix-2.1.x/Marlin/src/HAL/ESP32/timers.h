@@ -1,0 +1,139 @@
+/**
+ * Marlin 3D Printer Firmware
+ * Copyright (c) 2020 MarlinFirmware [https://github.com/MarlinFirmware/Marlin]
+ *
+ * Based on Sprinter and grbl.
+ * Copyright (c) 2011 Camiel Gubbels / Erik van der Zalm
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ */
+#pragma once
+
+#include <stdint.h>
+#include <driver/timer.h>
+
+// ------------------------
+// Defines
+// ------------------------
+#define FORCE_INLINE __attribute__((always_inline)) inline
+
+typedef uint64_t hal_timer_t;
+#define HAL_TIMER_TYPE_MAX hal_timer_t(UINT64_MAX)
+
+#ifndef MF_TIMER_STEP
+  #define MF_TIMER_STEP         0  // Timer Index for Stepper
+#endif
+#ifndef MF_TIMER_PULSE
+  #define MF_TIMER_PULSE        MF_TIMER_STEP // Timer Index for Pulse interval
+#endif
+#ifndef MF_TIMER_TEMP
+  #define MF_TIMER_TEMP         1  // Timer Index for Temperature
+#endif
+#ifndef MF_TIMER_PWM
+  #define MF_TIMER_PWM          2  // Timer Index for PWM outputs
+#endif
+#ifndef MF_TIMER_TONE
+  #define MF_TIMER_TONE         3  // Timer Index for beeper tones
+#endif
+
+#define HAL_TIMER_RATE APB_CLK_FREQ // Frequency of timer peripherals
+
+#define TEMP_TIMER_PRESCALE    1000 // Prescaler for setting Temp Timer, 72Khz
+#define TEMP_TIMER_FREQUENCY   1000 // (Hz) Temperature ISR frequency
+
+#if ENABLED(I2S_STEPPER_STREAM)
+  #define STEPPER_TIMER_PRESCALE     1
+  #define STEPPER_TIMER_RATE         250'000    // 250khz, 4µs pulses of i2s word clock
+  #define STEPPER_TIMER_TICKS_PER_US 0.25       // (MHz) Stepper Timer ticks per µs
+#else
+  #define STEPPER_TIMER_PRESCALE     40
+  #define STEPPER_TIMER_RATE         ((HAL_TIMER_RATE) / (STEPPER_TIMER_PRESCALE))  // (Hz) Frequency of Stepper Timer ISR, 2MHz
+  #define STEPPER_TIMER_TICKS_PER_US ((STEPPER_TIMER_RATE) / 1'000'000UL)           // (MHz) Stepper Timer ticks per µs
+#endif
+
+#define STEP_TIMER_MIN_INTERVAL   8 // minimum time in µs between stepper interrupts
+
+#define PULSE_TIMER_RATE            STEPPER_TIMER_RATE                              // (Hz) Frequency of Pulse Timer
+#define PULSE_TIMER_PRESCALE        STEPPER_TIMER_PRESCALE
+
+#define TONE_TIMER_PRESCALE    1000 // Arbitrary value, no idea what i'm doing here
+
+#define PWM_TIMER_PRESCALE       10
+#if ENABLED(FAST_PWM_FAN)
+  #define PWM_TIMER_FREQUENCY  FAST_PWM_FAN_FREQUENCY
+#else
+  #define PWM_TIMER_FREQUENCY  (50*128) // 50Hz and 7bit resolution
+#endif
+#define MAX_PWM_PINS             32 // Number of PWM pin-slots
+
+#define ENABLE_STEPPER_DRIVER_INTERRUPT()   HAL_timer_enable_interrupt(MF_TIMER_STEP)
+#define DISABLE_STEPPER_DRIVER_INTERRUPT()  HAL_timer_disable_interrupt(MF_TIMER_STEP)
+#define STEPPER_ISR_ENABLED()               HAL_timer_interrupt_enabled(MF_TIMER_STEP)
+
+#define ENABLE_TEMPERATURE_INTERRUPT()  HAL_timer_enable_interrupt(MF_TIMER_TEMP)
+#define DISABLE_TEMPERATURE_INTERRUPT() HAL_timer_disable_interrupt(MF_TIMER_TEMP)
+
+#ifndef HAL_TEMP_TIMER_ISR
+  #define HAL_TEMP_TIMER_ISR() extern "C" void tempTC_Handler()
+#endif
+#ifndef HAL_STEP_TIMER_ISR
+  #define HAL_STEP_TIMER_ISR() extern "C" void stepTC_Handler()
+#endif
+#ifndef HAL_PWM_TIMER_ISR
+  #define HAL_PWM_TIMER_ISR() extern "C" void pwmTC_Handler()
+#endif
+#ifndef HAL_TONE_TIMER_ISR
+  #define HAL_TONE_TIMER_ISR() extern "C" void toneTC_Handler()
+#endif
+
+extern "C" {
+  void tempTC_Handler();
+  void stepTC_Handler();
+  void pwmTC_Handler();
+  void toneTC_Handler();
+}
+
+// ------------------------
+// Types
+// ------------------------
+
+typedef struct {
+  timer_group_t  group;
+  timer_idx_t    idx;
+  uint32_t       divider;
+  void           (*fn)();
+} tTimerConfig;
+
+// ------------------------
+// Public Variables
+// ------------------------
+
+extern const tTimerConfig timer_config[];
+
+// ------------------------
+// Public functions
+// ------------------------
+
+void HAL_timer_start(const uint8_t timer_num, const uint32_t frequency);
+void HAL_timer_set_compare(const uint8_t timer_num, const hal_timer_t count);
+hal_timer_t HAL_timer_get_compare(const uint8_t timer_num);
+hal_timer_t HAL_timer_get_count(const uint8_t timer_num);
+
+void HAL_timer_enable_interrupt(const uint8_t timer_num);
+void HAL_timer_disable_interrupt(const uint8_t timer_num);
+bool HAL_timer_interrupt_enabled(const uint8_t timer_num);
+
+inline void HAL_timer_isr_prologue(const uint8_t) {}
+inline void HAL_timer_isr_epilogue(const uint8_t) {}
