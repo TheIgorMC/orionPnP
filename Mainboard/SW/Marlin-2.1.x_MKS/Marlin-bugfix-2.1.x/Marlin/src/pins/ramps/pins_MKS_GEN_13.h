@@ -59,6 +59,12 @@
 #undef EXP2_08_PIN
 #define EXP2_08_PIN                           -1  // RESET
 
+// Fake endstop pins for I/J axes (nozzle & feeder rotation - these axes never home).
+// Mapped to unused MAX endstop connectors. ENDSTOPPULLUPS keeps them HIGH = not hit
+// (I_MIN/J_MIN ENDSTOP_HIT_STATE = LOW in Configuration.h, so HIGH → never triggered).
+#define I_STOP_PIN                             2   // X_MAX pin (X+ connector, unconnected)
+#define J_STOP_PIN                            15   // Y_MAX pin (Y+ connector, unconnected)
+
 //
 // LCD / Controller
 //

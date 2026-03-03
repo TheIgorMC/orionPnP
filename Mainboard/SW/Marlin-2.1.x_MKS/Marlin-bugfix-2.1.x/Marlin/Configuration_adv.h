@@ -943,8 +943,8 @@
 
 //#define SENSORLESS_BACKOFF_MM  { 2, 2, 0 }  // (linear=mm, rotational=°) Backoff from endstops before sensorless homing
 
-#define HOMING_BUMP_MM      { 5, 5, 2 }       // (linear=mm, rotational=°) Backoff from endstops after first bump
-#define HOMING_BUMP_DIVISOR { 2, 2, 4 }       // Re-Bump Speed Divisor (Divides the Homing Feedrate)
+#define HOMING_BUMP_MM      { 5, 5, 2, 0, 0 } // (linear=mm, rotational=°) Backoff from endstops after first bump
+#define HOMING_BUMP_DIVISOR { 2, 2, 4, 1, 1 } // Re-Bump Speed Divisor (Divides the Homing Feedrate)
 
 //#define HOMING_BACKOFF_POST_MM { 2, 2, 2 }  // (linear=mm, rotational=°) Backoff from endstops after homing
 //#define XY_COUNTERPART_BACKOFF_MM 0         // (mm) Backoff X after homing Y, and vice-versa
@@ -3426,6 +3426,19 @@
   //#define Z4_SLAVE_ADDRESS 0
   //#define  I_SLAVE_ADDRESS 0
   //#define  J_SLAVE_ADDRESS 0
+
+  // TMC2208 UART pins for I (nozzle rotation) and J (feeder rotation) axes.
+  // Connect PDN_UART of each TMC2208 through a 1kΩ resistor to the TX pin,
+  // and (optionally) directly to the RX pin for configuration readback.
+  //
+  // I axis → MEGA Serial2 headers (raw MEGA pin header, not on RAMPS connectors):
+  //   D16 = MEGA TX2,  D17 = MEGA RX2
+  // J axis → RAMPS AUX2 connector (pins A3/A4):
+  //   D57 = A3 (AUX2),  D58 = A4 (AUX2)
+  #define I_SERIAL_TX_PIN 16   // MEGA TX2 (raw MEGA header)
+  #define I_SERIAL_RX_PIN 17   // MEGA RX2 (raw MEGA header)
+  #define J_SERIAL_TX_PIN 57   // A3 / D57 (RAMPS AUX2 connector)
+  #define J_SERIAL_RX_PIN 58   // A4 / D58 (RAMPS AUX2 connector)
   //#define  K_SLAVE_ADDRESS 0
   //#define  U_SLAVE_ADDRESS 0
   //#define  V_SLAVE_ADDRESS 0
@@ -3539,16 +3552,16 @@
    */
   //#define HYBRID_THRESHOLD
 
-  //#define X_HYBRID_THRESHOLD     100  // [mm/s]
+  #define X_HYBRID_THRESHOLD     100  // [mm/s]
   #define X2_HYBRID_THRESHOLD    100
-  //#define Y_HYBRID_THRESHOLD     100
+  #define Y_HYBRID_THRESHOLD     100  // [mm/s]
   #define Y2_HYBRID_THRESHOLD    100
   //#define Z_HYBRID_THRESHOLD       3
   #define Z2_HYBRID_THRESHOLD      3
   #define Z3_HYBRID_THRESHOLD      3
   #define Z4_HYBRID_THRESHOLD      3
-  //#define I_HYBRID_THRESHOLD       3  // [linear=mm/s, rotational=°/s]
-  //#define J_HYBRID_THRESHOLD       3  // [linear=mm/s, rotational=°/s]
+  #define I_HYBRID_THRESHOLD     200  // [rotational=°/s] – stay in StealthChop up to 200°/s
+  #define J_HYBRID_THRESHOLD     200  // [rotational=°/s] – stay in StealthChop up to 200°/s
   #define K_HYBRID_THRESHOLD       3  // [linear=mm/s, rotational=°/s]
   #define U_HYBRID_THRESHOLD       3  // [mm/s]
   #define V_HYBRID_THRESHOLD       3
