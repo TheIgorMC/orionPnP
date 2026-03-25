@@ -1,0 +1,30 @@
+{
+  "name": "Sn42Bi58 Low-Temp",
+  "paste_type": "Sn42Bi58",
+  "stages": [
+    {
+      "name": "Preheat",
+      "target_temp": 90,
+      "max_ramp_rate": 1.0,
+      "dwell_seconds": 60
+    },
+    {
+      "name": "Soak",
+      "target_temp": 130,
+      "max_ramp_rate": 0.5,
+      "dwell_seconds": 90
+    },
+    {
+      "name": "Reflow",
+      "target_temp": 165,
+      "max_ramp_rate": 1.5,
+      "dwell_seconds": 30
+    },
+    {
+      "name": "Cooling",
+      "target_temp": 40,
+      "max_ramp_rate": -2.0,
+      "dwell_seconds": 0
+    }
+  ]
+}
