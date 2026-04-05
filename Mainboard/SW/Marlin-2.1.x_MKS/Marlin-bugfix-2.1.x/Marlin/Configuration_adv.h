@@ -3146,7 +3146,7 @@
 
   #if AXIS_IS_TMC_CONFIG(X)
     #define X_CURRENT       800        // (mA) RMS current. Multiply by 1.414 for peak current.
-    #define X_CURRENT_HOME  X_CURRENT  // (mA) RMS current for homing. (Typically lower than *_CURRENT.)
+    #define X_CURRENT_HOME  500        // (mA) RMS current for homing. (~62% of run current for reliable StallGuard)
     #define X_MICROSTEPS     16        // 0..256
     #define X_RSENSE          0.11
     #define X_CHAIN_POS      -1        // -1..0: Not chained. 1: MCU MOSI connected. 2: Next in chain, ...
@@ -3166,7 +3166,7 @@
 
   #if AXIS_IS_TMC_CONFIG(Y)
     #define Y_CURRENT       900
-    #define Y_CURRENT_HOME  Y_CURRENT
+    #define Y_CURRENT_HOME  600        // (mA) RMS current for homing. (~67% of run current; series motors)
     #define Y_MICROSTEPS     16
     #define Y_RSENSE          0.11
     #define Y_CHAIN_POS      -1
@@ -3369,8 +3369,8 @@
    * Override default SPI pins for TMC2130, TMC2160, TMC2240, TMC2660, TMC5130 and TMC5160 drivers here.
    * The default pins can be found in your board's pins file.
    */
-  //#define X_CS_PIN      -1
-  //#define Y_CS_PIN      -1
+  #define X_CS_PIN      49
+  #define Y_CS_PIN      53
   //#define Z_CS_PIN      -1
   //#define X2_CS_PIN     -1
   //#define Y2_CS_PIN     -1
@@ -4829,12 +4829,12 @@
 //
 // M42 - Set pin states
 //
-//#define DIRECT_PIN_CONTROL
+#define DIRECT_PIN_CONTROL
 
 //
 // M43 - display pin status, toggle pins, watch pins, watch endstops & toggle LED, test servo probe
 //
-//#define PINS_DEBUGGING
+#define PINS_DEBUGGING
 
 //
 // M265 - I2C Scanner
