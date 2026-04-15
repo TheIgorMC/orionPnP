@@ -1,0 +1,110 @@
+//
+// !!! WARNING !!! AUTO-GENERATED FILE!
+// PLEASE DO NOT MODIFY IT AND USE "platformio.ini":
+// https://docs.platformio.org/page/projectconf/section_env_build.html#build-flags
+//
+{
+    "configurations": [
+        {
+            "name": "PlatformIO",
+            "includePath": [
+                "C:/Users/giova/Documents/GitHub/orionPnP/Mainboard/SW/Marlin-2.1.2.5/Marlin",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/Servo/src",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/SoftwareSerial/src",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/IWatchdog/src",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/EEPROM/src",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/SPI/src",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/Wire/src",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/avr",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/stm32",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/stm32/LL",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/stm32/usb",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/stm32/OpenAMP",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/stm32/usb/hid",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/stm32/usb/cdc",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Drivers/STM32F1xx_HAL_Driver/Inc",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Drivers/STM32F1xx_HAL_Driver/Src",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/STM32F1xx",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Middlewares/ST/STM32_USB_Device_Library/Core/Inc",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Middlewares/ST/STM32_USB_Device_Library/Core/Src",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Middlewares/OpenAMP",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Middlewares/OpenAMP/open-amp/lib/include",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Middlewares/OpenAMP/libmetal/lib/include",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Middlewares/OpenAMP/virtual_driver",
+                "C:/Users/giova/.platformio/packages/framework-cmsis/CMSIS/Core/Include",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Drivers/CMSIS/Device/ST/STM32F1xx/Include",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc",
+                "C:/Users/giova/.platformio/packages/framework-cmsis/CMSIS/DSP/Include",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/variants/Generic_F103Rx",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/CMSIS_DSP/src",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/Keyboard/src",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/Mouse/src",
+                "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/SrcWrapper/src",
+                ""
+            ],
+            "browse": {
+                "limitSymbolsToIncludedHeaders": true,
+                "path": [
+                    "C:/Users/giova/Documents/GitHub/orionPnP/Mainboard/SW/Marlin-2.1.2.5/Marlin",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/Servo/src",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/SoftwareSerial/src",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/IWatchdog/src",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/EEPROM/src",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/SPI/src",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/Wire/src",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/avr",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/stm32",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/stm32/LL",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/stm32/usb",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/stm32/OpenAMP",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/stm32/usb/hid",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino/stm32/usb/cdc",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Drivers/STM32F1xx_HAL_Driver/Inc",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Drivers/STM32F1xx_HAL_Driver/Src",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/STM32F1xx",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Middlewares/ST/STM32_USB_Device_Library/Core/Inc",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Middlewares/ST/STM32_USB_Device_Library/Core/Src",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Middlewares/OpenAMP",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Middlewares/OpenAMP/open-amp/lib/include",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Middlewares/OpenAMP/libmetal/lib/include",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Middlewares/OpenAMP/virtual_driver",
+                    "C:/Users/giova/.platformio/packages/framework-cmsis/CMSIS/Core/Include",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Drivers/CMSIS/Device/ST/STM32F1xx/Include",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/system/Drivers/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc",
+                    "C:/Users/giova/.platformio/packages/framework-cmsis/CMSIS/DSP/Include",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/cores/arduino",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/variants/Generic_F103Rx",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/CMSIS_DSP/src",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/Keyboard/src",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/Mouse/src",
+                    "C:/Users/giova/.platformio/packages/framework-arduinoststm32/libraries/SrcWrapper/src",
+                    ""
+                ]
+            },
+            "defines": [
+                "PLATFORMIO=60118",
+                "STM32F103xE",
+                "STM32F1",
+                "__MARLIN_FIRMWARE__",
+                "NDEBUG",
+                "STM32F1xx",
+                "ARDUINO=10808",
+                "ARDUINO_ARCH_STM32",
+                "ARDUINO_GENERICSTM32F103RE",
+                "BOARD_NAME=\"GENERICSTM32F103RE\"",
+                "HAL_UART_MODULE_ENABLED",
+                ""
+            ],
+            "cStandard": "gnu11",
+            "cppStandard": "gnu++14",
+            "compilerPath": "C:/Users/giova/.platformio/packages/toolchain-gccarmnoneeabi/bin/arm-none-eabi-gcc.exe",
+            "compilerArgs": [
+                "-mcpu=cortex-m3",
+                "-mthumb",
+                ""
+            ]
+        }
+    ],
+    "version": 4
+}
