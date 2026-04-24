@@ -107,6 +107,45 @@ Typically based on the **STM32F072**, as described in the [Software Overview](..
 
 ---
 
+## Tool Board
+
+A dedicated **ToolBoard** (V0.1a) is mounted on the machine head and handles nozzle-level functions:
+- Interfaces with solenoids, sensors, and LED lighting local to the toolhead
+- Designed to reduce wiring runs back to the mainboard
+- Hardware files (schematic, PCB, BOM, Gerbers, PnP CSV) are available in the [`ToolBoard/`](ToolBoard/) directory
+
+---
+
+## Reflow Oven
+
+OrionPnP includes a companion **Reflow Oven** system for completing the board assembly workflow, built around a consumer oven (De'Longhi 3835A) to avoid expensive commercial controllers.
+
+The system is developed in two phases:
+
+### Phase 1 — Non-invasive monitoring (current)
+- **RP2040 Pico firmware** (MicroPython): reads a MAX31855K SPI thermocouple amplifier every 500 ms and streams JSON lines over USB CDC serial
+- **PC desktop application** (Dear PyGui, Python 3): connects to the Pico by USB VID/PID auto-detection, displays a live temperature graph, logs data to timestamped CSV, and runs a **"Follow Me"** guided reflow mode
+- A **hardware-free MCU simulator** (`tools/simulate_mcu.py`) lets you develop and test the app without physical hardware, via virtual COM ports
+- Targets low-temperature pastes (e.g. Sn42Bi58, ~138 °C peak)
+
+### Phase 2 — Full hardware mod (future)
+- Adds SSR control for closed-loop automated reflow (PC-bound PID or standalone Pico-resident PID)
+- Supports standard and lead-free paste profiles (up to ~250 °C)
+
+See [`Reflow-Oven/`](Reflow-Oven/) for firmware, app source, and the full phase specification.
+
+---
+
+## Assembly Manuals
+
+Preliminary assembly manuals (PDF) for the first revision of the machine are available in the repo root:
+- [Manual R01 V01a](Manual_R01_V01a.pdf)
+- [Manual R01 V01b](Manual_R01_V01b.pdf)
+- [Manual R01 V01c](Manual_R01_V01c.pdf)
+- [Manual R01 V01d](Manual_R01_V01d.pdf) _(latest)_
+
+---
+
 ## Project Scope
 
 The core mainboard is in active prototyping.  
@@ -121,9 +160,10 @@ See [Build Your Own](../../wiki/Build-Your-Own) for parts list, tools, and assem
 
 - [x] CAD design of the frame and motion system
 - [x] Production of electronic boards (Core, camera lights, toolhead boards...)
+- [x] Assembly manual — first revision published (R01 V01d)
 - [ ] First tests on electronics (ongoing...)
 - [ ] Part printing (ongoing...)
-- [ ] Manual writing (ongoing...)
+- [x] Reflow oven Phase 1 app and firmware (in progress)
 
 ---
 
