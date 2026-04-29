@@ -1,0 +1,16 @@
+{
+  "paste": "Sn63/Pb37",
+  "liquidus_temp": 183,
+  "profile_points": [
+    {"stage": "Start", "time_s": 0, "temp_c": 25},
+    {"stage": "Preheat/Soak Start", "time_s": 60, "temp_c": 100},
+    {"stage": "Preheat/Soak End", "time_s": 150, "temp_c": 150},
+    {"stage": "Reflow Peak", "time_s": 210, "temp_c": 225},
+    {"stage": "Cooling End", "time_s": 270, "temp_c": 50}
+  ],
+  "constraints": {
+    "ramp_up_max": 3.0,
+    "ramp_down_max": 4.0,
+    "time_above_liquidus_sec": [30, 90]
+  }
+}
