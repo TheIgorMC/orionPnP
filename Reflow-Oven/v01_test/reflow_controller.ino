@@ -47,6 +47,13 @@ const ProfilePoint PROFILE[] = {
 const unsigned int PROFILE_LEN = sizeof(PROFILE) / sizeof(ProfilePoint);
 const uint16_t LIQUIDUS_TEMP = 183;  // Must exceed to melt solder
 
+enum ReflowPhase {
+  PHASE_PREHEAT,
+  PHASE_SOAK,
+  PHASE_REFLOW,
+  PHASE_COOLDOWN,
+};
+
 // ─── PID PARAMETERS ──────────────────────────────────────────────────────────
 // Tuned from measured system: τ ≈ 23s, DC gain ≈ 27
 const float Kp = 1.5;   // Proportional gain
@@ -69,6 +76,8 @@ const unsigned long SSR_UPDATE_INTERVAL = 500; // Update SSR duty every 500ms (s
 bool profileMode = true;
 bool ssrOn = false;
 uint8_t dutyPercent = 0;
+unsigned long lastOpenDoorWarn = 0;
+const unsigned long OPEN_DOOR_WARN_INTERVAL_MS = 3000;
 
 // ─── SETUP ───────────────────────────────────────────────────────────────────
 void setup() {
@@ -108,6 +117,19 @@ uint16_t getTargetTemp(unsigned long elapsed_s) {
     }
   }
   return PROFILE[PROFILE_LEN - 1].temp_c;
+}
+
+ReflowPhase getPhase(unsigned long elapsed_s) {
+  if (elapsed_s < PROFILE[1].time_s) {
+    return PHASE_PREHEAT;
+  }
+  if (elapsed_s < PROFILE[2].time_s) {
+    return PHASE_SOAK;
+  }
+  if (elapsed_s < PROFILE[3].time_s) {
+    return PHASE_REFLOW;
+  }
+  return PHASE_COOLDOWN;
 }
 
 // ─── PID CONTROLLER ──────────────────────────────────────────────────────────
@@ -171,6 +193,7 @@ void loop() {
         startTime = millis();
         integral_error = 0.0;
         prev_error = 0.0;
+        lastOpenDoorWarn = 0;
         profileMode = true;
         Serial.println(F("# Profile restarted from t=0"));
         break;
@@ -185,6 +208,7 @@ void loop() {
         startTime = now;
         integral_error = 0.0;
         prev_error = 0.0;
+        lastOpenDoorWarn = 0;
         Serial.println(F("# Profile mode resumed"));
         break;
 
@@ -236,24 +260,38 @@ void loop() {
 
     float current_temp = (float)temp_raw;
     unsigned long elapsed_s = (now - startTime) / 1000;
-    float target_temp = (float)getTargetTemp(elapsed_s);
+    float profile_target = (float)getTargetTemp(elapsed_s);
+    ReflowPhase phase = getPhase(elapsed_s);
+
+    // In preheat/soak, never command cooling when actual temp is already above target.
+    float effective_target = profile_target;
+    if ((phase == PHASE_PREHEAT || phase == PHASE_SOAK) && current_temp > profile_target) {
+      effective_target = current_temp;
+    }
 
     // Compute PID output
     uint8_t power_percent = 0;
     if (profileMode) {
-      power_percent = computePID(current_temp, target_temp);
+      power_percent = computePID(current_temp, effective_target);
     } else {
       power_percent = dutyPercent;
     }
 
-    float error = target_temp - current_temp;
+    float error = effective_target - current_temp;
+
+    if (profileMode && phase == PHASE_COOLDOWN && current_temp > (profile_target + 5.0)) {
+      if (now - lastOpenDoorWarn >= OPEN_DOOR_WARN_INTERVAL_MS) {
+        Serial.println(F("# WARNING: COOLDOWN too slow — OPEN DOOR"));
+        lastOpenDoorWarn = now;
+      }
+    }
 
     // CSV output
     Serial.print(now - startTime);
     Serial.print(',');
     Serial.print(current_temp, 1);
     Serial.print(',');
-    Serial.print(target_temp, 1);
+    Serial.print(effective_target, 1);
     Serial.print(',');
     Serial.print(error, 1);
     Serial.print(',');
