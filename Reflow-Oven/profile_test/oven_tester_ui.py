@@ -35,6 +35,8 @@ except ImportError:
 ROOT = Path(__file__).resolve().parent
 DEFAULT_PROFILE = ROOT.parent / "v01_test" / "leaded.json"
 DEFAULT_CSV = ROOT.parent / "v01_test" / "reflowTest_001.csv"
+MIN_REASONABLE_TEMP_C = -20.0
+MAX_REASONABLE_TEMP_C = 400.0
 
 
 @dataclass
@@ -43,6 +45,7 @@ class Sample:
     temp_c: float
     top: int
     bottom: int
+    target_c: Optional[float] = None
 
 
 @dataclass
@@ -64,6 +67,15 @@ class SerialLink:
         if list_ports is None:
             return []
         return [p.device for p in list_ports.comports()]
+
+    def preferred_port(self) -> str:
+        if list_ports is None:
+            return ""
+        for p in list_ports.comports():
+            desc = (getattr(p, "description", "") or "").lower()
+            if "arduino" in desc and "micro" in desc:
+                return p.device
+        return ""
 
     def connect(self, port: str, baud: int = 115200) -> None:
         if serial is None:
@@ -149,6 +161,7 @@ class CsvReplay:
                         temp_c=float(row["temp_C"]),
                         top=int(float(row.get("top", 0) or 0)),
                         bottom=int(float(row.get("bottom", 0) or 0)),
+                        target_c=float(row["target_C"]) if row.get("target_C") else None,
                     )
                 except ValueError:
                     continue
@@ -235,14 +248,46 @@ class ProfileModel:
 
 def parse_data_line(line: str) -> Optional[Sample]:
     parts = [p.strip() for p in line.split(",")]
-    if len(parts) < 4:
+    if len(parts) < 2:
         return None
     try:
+        t_ms = int(float(parts[0]))
+        temp_c = float(parts[1])
+        if not (MIN_REASONABLE_TEMP_C <= temp_c <= MAX_REASONABLE_TEMP_C):
+            return None
+
+        # Accept both formats:
+        # 1) time,temp,top,bottom
+        # 2) time,temp,target,error,power_percent
+        top = 0
+        bottom = 0
+        target_c: Optional[float] = None
+        if len(parts) >= 4:
+            try:
+                top = int(float(parts[2]))
+                bottom = int(float(parts[3]))
+            except ValueError:
+                pass
+        if len(parts) >= 5:
+            try:
+                target_c = float(parts[2])
+                if not (MIN_REASONABLE_TEMP_C <= target_c <= MAX_REASONABLE_TEMP_C):
+                    target_c = None
+            except ValueError:
+                target_c = None
+            try:
+                power = int(float(parts[4]))
+                top = power
+                bottom = power
+            except ValueError:
+                pass
+
         return Sample(
-            t_ms=int(parts[0]),
-            temp_c=float(parts[1]),
-            top=int(parts[2]),
-            bottom=int(parts[3]),
+            t_ms=t_ms,
+            temp_c=temp_c,
+            top=top,
+            bottom=bottom,
+            target_c=target_c,
         )
     except ValueError:
         return None
@@ -320,6 +365,9 @@ class App:
         self.sample_queue: queue.Queue[Sample] = queue.Queue(maxsize=2000)
         self.samples: list[Sample] = []
         self.targets: list[Optional[float]] = []
+        self.follow_device_profile = False
+        self.profile_ref_active = False
+        self.profile_ref_start_s = 0.0
 
         self.serial = SerialLink(self._push_sample)
         self.replay = CsvReplay(self._push_sample)
@@ -359,7 +407,8 @@ class App:
         self.ax.set_ylabel("C")
         self.ax.grid(True, alpha=0.3)
         self.meas_line, = self.ax.plot([], [], label="Measured", color="#1f77b4")
-        self.tgt_line, = self.ax.plot([], [], label="Target", color="#ff7f0e", linestyle="--")
+        self.ref_line, = self.ax.plot([], [], label="Profile Ref", color="#2ca02c", linewidth=2.0)
+        self.tgt_line, = self.ax.plot([], [], label="Device Target", color="#ff7f0e", linestyle="--")
         self.ax.legend(loc="upper left")
 
         canvas = FigureCanvasTkAgg(figure, master=root)
@@ -442,17 +491,30 @@ class App:
     def _refresh_ports(self) -> None:
         ports = self.serial.available_ports()
         self.port_combo["values"] = ports
-        if ports:
+        preferred = self.serial.preferred_port()
+        if preferred:
+            self.port_combo.set(preferred)
+            if not self.serial.connected_port:
+                self._connect(silent=True)
+        elif ports:
             self.port_combo.set(ports[0])
 
-    def _connect(self) -> None:
+    def _connect(self, silent: bool = False) -> None:
         self._stop_csv()
         port = self.port_combo.get().strip()
         if not port:
-            messagebox.showwarning("Serial", "Select a COM port")
+            if not silent:
+                messagebox.showwarning("Serial", "Select a COM port")
             return
         self._reset_traces()
-        self.serial.connect(port)
+        try:
+            self.serial.connect(port)
+        except Exception as exc:
+            self.status_var.set("Disconnected")
+            if not silent:
+                messagebox.showerror("Serial", str(exc))
+            return
+        self.follow_device_profile = False
         self.status_var.set(f"Connected: {port}")
 
     def _disconnect(self) -> None:
@@ -475,6 +537,7 @@ class App:
             return
         self._disconnect()
         self._reset_traces()
+        self.follow_device_profile = False
         self.replay.start(path)
         self.status_var.set(f"Simulation: {path.name}")
 
@@ -582,16 +645,32 @@ class App:
         self._refresh_points_tree()
 
     def _start_preheat(self) -> None:
-        self.engine.start_preheat(float(self.preheat_var.get()))
+        target = float(self.preheat_var.get())
+        # Delegate preheat control to firmware predictive controller.
+        self.engine.stop()
+        self.follow_device_profile = False
+        self.profile_ref_active = False
+        self.serial.send(f"H{target:.1f}\n")
 
     def _start_profile(self) -> None:
         if len(self.profile.points) < 2:
             messagebox.showwarning("Profile", "Load or create a profile with at least 2 points")
             return
-        start_ms = self.samples[-1].t_ms if self.samples else 0
-        self.engine.start_profile(start_ms)
+        # Run/resume firmware profile cycle; UI follows reported target from telemetry.
+        self.engine.stop()
+        self.follow_device_profile = True
+        if self.samples:
+            base = self.samples[0].t_ms
+            self.profile_ref_start_s = (self.samples[-1].t_ms - base) / 1000.0
+        else:
+            self.profile_ref_start_s = 0.0
+        self.profile_ref_active = True
+        self.serial.send("P")
+        self._update_plot()
 
     def _stop_auto(self) -> None:
+        self.follow_device_profile = False
+        self.profile_ref_active = False
         self.engine.stop()
         self._send_manual("X")
 
@@ -601,6 +680,9 @@ class App:
     def _reset_traces(self) -> None:
         self.samples.clear()
         self.targets.clear()
+        self.follow_device_profile = False
+        self.profile_ref_active = False
+        self.profile_ref_start_s = 0.0
         while not self.sample_queue.empty():
             try:
                 self.sample_queue.get_nowait()
@@ -608,25 +690,52 @@ class App:
                 break
 
     def _update_plot(self) -> None:
-        if not self.samples:
-            return
-
-        base = self.samples[0].t_ms
-        xs = [(s.t_ms - base) / 1000.0 for s in self.samples]
-        ys = [s.temp_c for s in self.samples]
+        xs: list[float] = []
+        ys: list[float] = []
+        if self.samples:
+            base = self.samples[0].t_ms
+            pairs = [
+                ((s.t_ms - base) / 1000.0, s.temp_c)
+                for s in self.samples
+                if MIN_REASONABLE_TEMP_C <= s.temp_c <= MAX_REASONABLE_TEMP_C
+            ]
+            xs = [p[0] for p in pairs]
+            ys = [p[1] for p in pairs]
         self.meas_line.set_data(xs, ys)
 
         tx = []
         ty = []
         for i, t in enumerate(self.targets):
-            if t is not None and i < len(xs):
+            if t is not None and MIN_REASONABLE_TEMP_C <= t <= MAX_REASONABLE_TEMP_C and i < len(xs):
                 tx.append(xs[i])
                 ty.append(t)
         self.tgt_line.set_data(tx, ty)
 
-        y_all = ys + ty if ty else ys
-        self.ax.set_xlim(max(0.0, xs[-1] - 300), xs[-1] + 5)
-        self.ax.set_ylim(min(y_all) - 5, max(y_all) + 5)
+        rx = []
+        ry = []
+        if self.profile_ref_active and self.profile.points:
+            end_s = max(0.0, self.profile.points[-1].time_s)
+            t = 0.0
+            while t <= end_s:
+                temp, _stage = self.profile.target_at(t)
+                rx.append(self.profile_ref_start_s + t)
+                ry.append(temp)
+                t += 1.0
+            if not rx or rx[-1] < self.profile_ref_start_s + end_s:
+                temp, _stage = self.profile.target_at(end_s)
+                rx.append(self.profile_ref_start_s + end_s)
+                ry.append(temp)
+        self.ref_line.set_data(rx, ry)
+
+        x_candidates = xs + rx
+        y_all = ys + ty + ry
+        if x_candidates and y_all:
+            x_last = max(x_candidates)
+            self.ax.set_xlim(max(0.0, x_last - 300), x_last + 5)
+            self.ax.set_ylim(min(y_all) - 5, max(y_all) + 5)
+        elif rx and ry:
+            self.ax.set_xlim(max(0.0, rx[0] - 10), rx[-1] + 5)
+            self.ax.set_ylim(min(ry) - 5, max(ry) + 5)
         self.canvas.draw_idle()
 
     def _tick(self) -> None:
@@ -645,6 +754,13 @@ class App:
         if updated and self.samples:
             latest = self.samples[-1]
             target, phase, command = self.engine.step(latest, self.profile if self.profile.points else None)
+
+            # When UI auto-control is idle, follow firmware target from serial telemetry.
+            if self.engine.mode == "idle" and self.follow_device_profile and latest.target_c is not None:
+                if MIN_REASONABLE_TEMP_C <= latest.target_c <= MAX_REASONABLE_TEMP_C:
+                    target = latest.target_c
+                    phase = "profile"
+
             self.targets.append(target)
 
             if command is not None:
