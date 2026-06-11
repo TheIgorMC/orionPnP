@@ -38,12 +38,14 @@ import google.generativeai as genai
 
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    print("ERROR: GEMINI_API_KEY not set. Add it to a .env file.", file=sys.stderr)
-    sys.exit(1)
 
-genai.configure(api_key=GEMINI_API_KEY)
+def configure_gemini() -> None:
+    """Configure Gemini from GEMINI_API_KEY in environment/.env."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("ERROR: GEMINI_API_KEY not set. Add it to a .env file.", file=sys.stderr)
+        sys.exit(1)
+    genai.configure(api_key=api_key)
 
 # ---------------------------------------------------------------------------
 # Gemini prompt
@@ -90,6 +92,7 @@ def upload_pdf(pdf_path: Path):
 
 def extract_specs(pdf_path: Path) -> dict:
     """Send the PDF to Gemini and parse the returned tape specs."""
+    configure_gemini()
     model = genai.GenerativeModel("gemini-1.5-flash")
     uploaded = upload_pdf(pdf_path)
     try:

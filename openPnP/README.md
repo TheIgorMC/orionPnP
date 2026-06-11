@@ -42,6 +42,7 @@ The `scripts/Events/` folder is reserved for event-triggered scripts (e.g., job 
 | File | Description |
 |------|-------------|
 | `datasheet_to_feeder.py` | Reads a component datasheet PDF via the Gemini API and outputs an openPnP `BlindsFeeder` XML snippet with the extracted tape specs |
+| `batch_parts_to_feeders.py` | Reads a CSV list of parts, groups by footprint then variation series, uses Gemini with web search to estimate tape specs and component size, and outputs bulk feeder XML + review report |
 | `requirements.txt` | Python dependencies for the util scripts |
 | `.env.example` | Template for the required `GEMINI_API_KEY` environment variable |
 
@@ -71,3 +72,27 @@ The script uploads the PDF to the Gemini Files API, extracts the following field
 | Sprocket pitch | `sprocket-pitch` |
 
 The output XML can be pasted directly inside the `<feeders>` section of `machine.xml`.
+
+#### `batch_parts_to_feeders.py` usage (CSV automation)
+
+Use this when you already have a CSV with many part numbers (e.g. `scripts/util/exported.csv`).
+
+```bash
+# Install dependencies
+pip install -r scripts/util/requirements.txt
+
+# Run batch generation from a CSV export
+python scripts/util/batch_parts_to_feeders.py scripts/util/exported.csv \
+    --output scripts/util/feeders_generated.xml \
+    --report scripts/util/feeders_generated_report.csv
+```
+
+What it does:
+
+1. Reads `id`, `manufacturer_code`, and `smd_footprint` from the CSV.
+2. Groups parts by `smd_footprint` first, then by inferred series/variation.
+3. Calls search-enabled Gemini (`gemini-2.5-flash` + Google Search tool) per variation group to infer tape specs and component size.
+4. Generates one `<feeder>` per CSV row with the inferred variation specs.
+5. Writes a review CSV with footprint, variation, confidence, component dimensions, and datasheet URL.
+
+The XML output contains a `<feeders>` root with comments showing footprint, variation, confidence, dimensions, and a datasheet source link for each block.
