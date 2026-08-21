@@ -5,17 +5,28 @@
 /*
   DRV8833 + AS5600 closed-loop wheel-position test bench (STM32F411CC Blackpill)
 
-  - Motor A drives the 40-tooth sprocket wheel. An AS5600 magnetic encoder
-    (mounted on the wheel shaft) reports absolute angle over I2C so firmware
-    can close the loop and stop exactly on target.
-  - Motor B channel exists on the DRV8833 but is intentionally NEVER driven.
-    Its inputs are held braked for the whole program lifetime.
+  - Motor A drives the 40-tooth sprocket wheel (front/tape-feed motor). An
+    AS5600 magnetic encoder (mounted on the wheel shaft) reports absolute
+    angle over I2C so firmware can close the loop and stop exactly on
+    target.
+  - Motor B (rear/peel motor, pulls cover tape) has no position feedback of
+    its own, so it is only ever driven open-loop, fixed on/off (no PWM).
+    Whenever a move/feed of motor A turns out to be in the real-world
+    *forward* direction (jogs, STEP/T/A commands, continuous feed), motor B
+    runs alone afterward for exactly as long as that move took - see
+    RAW_ANGLE_INCREASE_IS_REVERSE and the PEEL sections in moveToAngle()/
+    continuousFeed(). Motor B is never driven for A's reverse motion. It
+    also runs alone, timed to a fixed duration, for the standalone PEEL
+    command (GO+ double-tap or serial `PEEL`).
   - On boot (and on demand via the ZERO command) firmware auto-calibrates the
     "still" duty: the highest PWM duty that does NOT move the wheel, and the
     breakaway duty just above it, separately for each direction. Closed-loop
-    moves use that calibration instead of a guessed constant.
+    moves use that calibration instead of a guessed constant. This only
+    applies to motor A - motor B has no encoder to calibrate against.
   - Target position can be commanded as an absolute angle, an absolute tooth
     index, or a relative +/-1 tooth / +/-0.5 tooth step, over USB serial.
+  - Each jog button also supports a long-press (continuous feed until
+    released) and, on the forward button only, a double-tap (PEEL command).
 */
 
 // ---------------------------
@@ -27,15 +38,19 @@
 // target, the stall detector, the move timeout, or DRV8833 nFAULT. Serial
 // STOP still works, but (like these buttons) only between moves, since
 // moveToAngle() blocks and never polls Serial while a move is running.
+//
+// Each button supports three gestures: tap (jog one tooth), hold past
+// LONG_PRESS_MS (continuous feed until released), and - forward button
+// only - a double-tap within DOUBLE_TAP_WINDOW_MS (PEEL command).
 const int PIN_GO_FWD_INPUT = PB12; // jog +1 tooth (forward)
 const int PIN_GO_REV_INPUT = PB13; // jog -1 tooth (reverse)
 
-// DRV8833 channel A -> sprocket wheel motor (the only motor ever driven)
+// DRV8833 channel A -> sprocket wheel motor (front/tape-feed, closed-loop)
 const int PIN_AIN1 = PA8;  // PWM, forward duty
 const int PIN_AIN2 = PA9;  // PWM, reverse duty
 
-// DRV8833 channel B -> NOT USED. Wired for board compatibility only, held
-// braked in setup() and never touched again.
+// DRV8833 channel B -> rear/peel motor (pulls cover tape). No encoder, so
+// always driven fixed on/off (no PWM) - see driveMotorB().
 const int PIN_BIN1 = PA10;
 const int PIN_BIN2 = PB9;
 
@@ -79,8 +94,58 @@ const float STALL_MOVE_THRESHOLD_DEG = 0.15f;
 const bool BUTTONS_ACTIVE_LOW = true;
 const unsigned long DEBOUNCE_MS = 20;
 
-// Flip if the wheel turns opposite to what you commanded.
+// Flip ONLY if the closed loop fights itself: a move drives away from
+// target, error keeps growing instead of shrinking, and it eventually
+// times out after nearly a full revolution. That means the motor and
+// encoder disagree on which physical rotation is "increasing raw angle" -
+// this is a hardware self-consistency property the whole control loop's
+// convergence depends on, unrelated to which real-world direction gets
+// called "forward" (that's RAW_ANGLE_INCREASE_IS_REVERSE below - a
+// completely different fix, applied at a different layer. Flipping this
+// one for that symptom instead will make the loop fight itself).
 const bool INVERT_DIRECTION = false;
+// Flip if motor B (rear/peel motor) runs opposite to what's expected.
+const bool INVERT_DIRECTION_B = false;
+
+// True if driving the wheel so its raw AS5600 angle *increases* is this
+// mechanism's real-world REVERSE (tape retracting), not forward. This is
+// the one place that answers "which physical rotation is forward" -
+// everything derived from it (which way +1 tooth moves the target, which
+// way T<index> counts, when the PEEL-after-forward sequencing kicks in,
+// which label "FWD"/"REV" prints in logs) reads this single fact instead
+// of being flipped independently, so those can't drift out of sync with
+// each other.
+//
+// Confirmed true on this bench: STEP-2 (a pure target-angle change, no
+// buttons involved) completed correctly - no fighting, no timeout, so the
+// motor/encoder relationship INVERT_DIRECTION governs is fine as-is - but
+// in the physically-backwards direction. That is exactly this symptom,
+// not INVERT_DIRECTION's.
+const bool RAW_ANGLE_INCREASE_IS_REVERSE = true;
+
+// Signed "one tooth" delta in the direction a forward jog/STEP+/increasing
+// T<index> should move the target. Negative here means "+1 tooth"
+// actually decreases the raw target angle, since forward has to mean
+// raw-decrease when raw-increase is reverse (above).
+const float TOOTH_STEP_DEG = RAW_ANGLE_INCREASE_IS_REVERSE ? -DEG_PER_TOOTH : DEG_PER_TOOTH;
+
+// ---------------------------
+// Button gesture tuning
+// ---------------------------
+// Hold a jog button past this and it's a long-press (continuous feed)
+// instead of a tap.
+const unsigned long LONG_PRESS_MS = 350;
+// A second tap of the forward button starting within this long after the
+// first tap's release registers as a double-tap (PEEL) instead of two
+// separate single-tooth jogs.
+const unsigned long DOUBLE_TAP_WINDOW_MS = 350;
+// Motor B (rear/peel motor) has no encoder, so PEEL is necessarily a fixed
+// timed drive rather than a measured distance. Tune this to how much cover
+// tape one peel should pull.
+const unsigned long PEEL_DURATION_MS = 400;
+// Duty used for motor A during continuous feed (long-press). There's no
+// target to creep toward while free-running, so this is the only speed.
+const int CONTINUOUS_FEED_DUTY = FAST_DUTY;
 
 // ---------------------------
 // Zero-point (still-duty) calibration tuning
@@ -230,6 +295,14 @@ float angleErrorDeg(float target, float current) {
   return diff;
 }
 
+// Translates a raw drive direction (true = driving so raw angle increases)
+// into the real-world forward/reverse sense - see
+// RAW_ANGLE_INCREASE_IS_REVERSE. Used for anything user-facing: log
+// labels, the motor-B PEEL-after-forward-move trigger.
+bool toRealForward(bool rawForward) {
+  return RAW_ANGLE_INCREASE_IS_REVERSE ? !rawForward : rawForward;
+}
+
 // ---------------------------
 // Motor drive
 // ---------------------------
@@ -259,27 +332,118 @@ void driveMotorA(int duty, bool forward) {
   }
 }
 
-// Motor B is never driven. Called once from setup() and never again.
-void lockMotorBOff() {
+void initMotorBPins() {
   pinMode(PIN_BIN1, OUTPUT);
   pinMode(PIN_BIN2, OUTPUT);
   digitalWrite(PIN_BIN1, HIGH);
-  digitalWrite(PIN_BIN2, HIGH); // hard brake / safe hold
+  digitalWrite(PIN_BIN2, HIGH); // hard brake / safe hold until first driven
 }
 
-bool buttonPressed(int pin, unsigned long &lastEdgeMs) {
+void brakeMotorB() {
+  digitalWrite(PIN_BIN1, HIGH);
+  digitalWrite(PIN_BIN2, HIGH);
+}
+
+// Motor B (rear/peel motor) has no position feedback, so there's no encoder
+// to close a speed loop against and no calibrated creep duty like motor A
+// has. It only ever runs fixed on/off (full duty, no analogWrite/PWM) -
+// forward, after a real-world-forward move/feed of motor A completes (see
+// runPeelFor()), or for the manual PEEL command. Reverse is implemented
+// for symmetry with driveMotorA() but nothing currently calls it with
+// forward=false.
+void driveMotorB(bool forward) {
+  const bool effectiveForward = INVERT_DIRECTION_B ? !forward : forward;
+  if (effectiveForward) {
+    digitalWrite(PIN_BIN1, HIGH);
+    digitalWrite(PIN_BIN2, LOW);
+  } else {
+    digitalWrite(PIN_BIN1, LOW);
+    digitalWrite(PIN_BIN2, HIGH);
+  }
+}
+
+void brakeAll() {
+  brakeMotorA();
+  brakeMotorB();
+}
+
+// Runs motor B (rear/peel motor) alone for durationMs, then brakes it.
+// Shared by the standalone PEEL command (fixed PEEL_DURATION_MS) and by
+// moveToAngle()/continuousFeed(), which call this after a real-world-
+// forward move/feed completes, timed to match however long that move
+// took - see peelTape() and the PEEL sections in moveToAngle()/
+// continuousFeed() for why this replaced running motor B concurrently.
+void runPeelFor(unsigned long durationMs) {
+  const unsigned long start = millis();
+  while (millis() - start < durationMs) {
+    if (digitalRead(PIN_nFAULT) == LOW) {
+      brakeMotorB();
+      Serial.println("  ERROR: DRV8833 fault asserted, peel aborted");
+      return;
+    }
+    driveMotorB(true);
+    delay(5);
+  }
+  brakeMotorB();
+}
+
+// ---------------------------
+// Button gesture detection
+// ---------------------------
+enum ButtonGesture { GESTURE_TAP, GESTURE_DOUBLE_TAP, GESTURE_HELD };
+
+// Debounced press-edge detector only - does not wait for release. Whatever
+// gesture the press turns out to be (tap/double-tap/hold) is worked out by
+// classifyPress() afterward.
+bool buttonJustPressed(int pin, unsigned long &lastEdgeMs) {
   const int activeLevel = BUTTONS_ACTIVE_LOW ? LOW : HIGH;
   if (digitalRead(pin) == activeLevel) {
     const unsigned long now = millis();
     if (now - lastEdgeMs >= DEBOUNCE_MS) {
       lastEdgeMs = now;
-      while (digitalRead(pin) == activeLevel) {
-        delay(1);
-      }
       return true;
     }
   }
   return false;
+}
+
+// Call right after buttonJustPressed() returns true for this pin. Blocks
+// only long enough to classify the gesture:
+//  - GESTURE_HELD: returned as soon as the button has been continuously
+//    pressed past LONG_PRESS_MS. The button is still down when this
+//    returns - the caller (continuousFeed()) polls it directly to know
+//    when to stop.
+//  - GESTURE_TAP / GESTURE_DOUBLE_TAP: returned only after release(s), once
+//    it's clear no more taps are coming (or immediately on release if
+//    allowDoubleTap is false).
+ButtonGesture classifyPress(int pin, unsigned long &lastEdgeMs, bool allowDoubleTap) {
+  const int activeLevel = BUTTONS_ACTIVE_LOW ? LOW : HIGH;
+  const unsigned long pressStart = millis();
+
+  while (digitalRead(pin) == activeLevel) {
+    if (millis() - pressStart >= LONG_PRESS_MS) {
+      return GESTURE_HELD;
+    }
+    delay(1);
+  }
+  lastEdgeMs = millis(); // anchor debounce to this release
+
+  if (!allowDoubleTap) return GESTURE_TAP;
+
+  const unsigned long releaseMs = millis();
+  while (millis() - releaseMs < DOUBLE_TAP_WINDOW_MS) {
+    if (digitalRead(pin) == activeLevel) {
+      delay(DEBOUNCE_MS);
+      if (digitalRead(pin) != activeLevel) continue; // bounce, not a real press
+      while (digitalRead(pin) == activeLevel) {
+        delay(1);
+      }
+      lastEdgeMs = millis();
+      return GESTURE_DOUBLE_TAP;
+    }
+    delay(1);
+  }
+  return GESTURE_TAP;
 }
 
 // ---------------------------
@@ -292,7 +456,7 @@ bool buttonPressed(int pin, unsigned long &lastEdgeMs) {
 // immediately instead of leaving it to be reconstructed from STATUS lines.
 void printMoveAbortDetail(float startAngle, float target, float current,
                            unsigned long start, unsigned long lastMoveMs,
-                           int duty, bool forward) {
+                           int duty, bool realForward) {
   Serial.print("  start=");
   Serial.print(startAngle, 2);
   Serial.print(" target=");
@@ -308,7 +472,7 @@ void printMoveAbortDetail(float startAngle, float target, float current,
   Serial.print("ms | duty=");
   Serial.print(duty);
   Serial.print(" dir=");
-  Serial.print(forward ? "FWD" : "REV");
+  Serial.print(realForward ? "FWD" : "REV");
   Serial.print(" | ");
   printMagnetLine(true);
 }
@@ -320,6 +484,11 @@ bool moveToAngle(float target, unsigned long timeoutMs) {
   unsigned long lastTraceMs = 0;
   float lastAngle = readAngleDeg();
   const float startAngle = lastAngle;
+  // Real-world direction is fixed for the whole move (a working move is
+  // monotonic - the shortest path doesn't flip direction partway), so it's
+  // simplest and most robust to capture it once here rather than re-derive
+  // it from whatever the last loop iteration's raw direction happens to be.
+  const bool movingRealForward = toRealForward(angleErrorDeg(target, startAngle) > 0);
 
   if (traceMoveEnabled) {
     Serial.print("[move ");
@@ -335,14 +504,14 @@ bool moveToAngle(float target, unsigned long timeoutMs) {
 
   while (true) {
     if (digitalRead(PIN_nFAULT) == LOW) {
-      brakeMotorA();
+      brakeAll();
       Serial.print("[move ");
       Serial.print(moveId);
       Serial.println("] ERROR: DRV8833 fault asserted, move aborted");
       return false;
     }
     if (!magnetDetected()) {
-      brakeMotorA();
+      brakeAll();
       Serial.print("[move ");
       Serial.print(moveId);
       Serial.println("] ERROR: magnet lost during move (MD=0), move aborted");
@@ -353,20 +522,36 @@ bool moveToAngle(float target, unsigned long timeoutMs) {
     const float err = angleErrorDeg(target, current);
 
     if (fabsf(err) <= ANGLE_TOLERANCE_DEG) {
-      brakeMotorA();
+      brakeAll();
+      const unsigned long elapsed = millis() - start;
       Serial.print("[move ");
       Serial.print(moveId);
       Serial.print("] Reached target: ");
       Serial.print(current, 2);
       Serial.println(" deg");
+      // PEEL-after-forward: motor B has no encoder, so instead of running
+      // it concurrently with A (which offered no way to know how far B had
+      // actually gone), it now runs alone afterward, for exactly as long
+      // as this move took. Reverse moves never trigger it.
+      if (movingRealForward) {
+        Serial.print("[move ");
+        Serial.print(moveId);
+        Serial.print("] PEEL: running rear motor (B) for ");
+        Serial.print(elapsed);
+        Serial.println("ms (matches this move's duration)");
+        runPeelFor(elapsed);
+        Serial.print("[move ");
+        Serial.print(moveId);
+        Serial.println("] PEEL complete");
+      }
       return true;
     }
 
-    const bool forward = err > 0;
+    const bool rawForward = err > 0;
     const int duty = (fabsf(err) > CREEP_THRESHOLD_DEG)
         ? FAST_DUTY
-        : (forward ? minMoveDutyFwd : minMoveDutyRev);
-    driveMotorA(duty, forward);
+        : (rawForward ? minMoveDutyFwd : minMoveDutyRev);
+    driveMotorA(duty, rawForward);
 
     const float movedSinceLast = fabsf(angleErrorDeg(current, lastAngle));
     if (movedSinceLast > STALL_MOVE_THRESHOLD_DEG) {
@@ -387,26 +572,26 @@ bool moveToAngle(float target, unsigned long timeoutMs) {
       Serial.print(" duty=");
       Serial.print(duty);
       Serial.print(" dir=");
-      Serial.print(forward ? "FWD" : "REV");
+      Serial.print(toRealForward(rawForward) ? "FWD" : "REV");
       Serial.print(" sinceMotion=");
       Serial.print(millis() - lastMoveMs);
       Serial.println("ms");
     }
 
     if (millis() - lastMoveMs > STALL_TIMEOUT_MS) {
-      brakeMotorA();
+      brakeAll();
       Serial.print("[move ");
       Serial.print(moveId);
       Serial.println("] ERROR: stall detected (no encoder motion), move aborted");
-      printMoveAbortDetail(startAngle, target, current, start, lastMoveMs, duty, forward);
+      printMoveAbortDetail(startAngle, target, current, start, lastMoveMs, duty, toRealForward(rawForward));
       return false;
     }
     if (millis() - start > timeoutMs) {
-      brakeMotorA();
+      brakeAll();
       Serial.print("[move ");
       Serial.print(moveId);
       Serial.println("] ERROR: move timeout, aborted");
-      printMoveAbortDetail(startAngle, target, current, start, lastMoveMs, duty, forward);
+      printMoveAbortDetail(startAngle, target, current, start, lastMoveMs, duty, toRealForward(rawForward));
       return false;
     }
 
@@ -438,6 +623,145 @@ bool commandMoveTo(float target, unsigned long timeoutMs) {
     targetAngleDeg = actual;
   }
   return ok;
+}
+
+// Long-press jog: runs motor A at a fixed duty for as long as the
+// triggering button stays held, ignoring target/tolerance entirely. This
+// is a manual speed-jog, not a closed-loop move - there's nothing to reach,
+// so no move timeout applies. The stall detector and nFAULT are still
+// live, same protection as a normal move. targetAngleDeg is resynced to
+// the real angle when the button is released, for the same reason
+// commandMoveTo() does it: so the next tap/hold starts from where the
+// wheel actually is instead of a stale target.
+//
+// `realForward` is the real-world direction intent - true for the GO+
+// button, false for GO- - not the raw motor-pin sense; it's translated to
+// a raw drive direction internally via toRealForward()/
+// RAW_ANGLE_INCREASE_IS_REVERSE, same as moveToAngle().
+void continuousFeed(bool realForward, int pin) {
+  const int activeLevel = BUTTONS_ACTIVE_LOW ? LOW : HIGH;
+  const bool rawForward = RAW_ANGLE_INCREASE_IS_REVERSE ? !realForward : realForward;
+  const unsigned long moveId = ++moveSeq;
+  const unsigned long start = millis();
+  unsigned long lastMoveMs = millis();
+  unsigned long lastTraceMs = 0;
+  float lastAngle = readAngleDeg();
+
+  Serial.print("[move ");
+  Serial.print(moveId);
+  Serial.print("] continuous feed ");
+  Serial.print(realForward ? "FWD" : "REV");
+  Serial.println(" started (button held)");
+
+  while (digitalRead(pin) == activeLevel) {
+    if (digitalRead(PIN_nFAULT) == LOW) {
+      brakeAll();
+      Serial.print("[move ");
+      Serial.print(moveId);
+      Serial.println("] ERROR: DRV8833 fault asserted, continuous feed aborted");
+      targetAngleDeg = readAngleDeg();
+      return;
+    }
+    if (!magnetDetected()) {
+      brakeAll();
+      Serial.print("[move ");
+      Serial.print(moveId);
+      Serial.println("] ERROR: magnet lost during continuous feed, aborted");
+      targetAngleDeg = readAngleDeg();
+      return;
+    }
+
+    const float current = readAngleDeg();
+    driveMotorA(CONTINUOUS_FEED_DUTY, rawForward);
+
+    const float movedSinceLast = fabsf(angleErrorDeg(current, lastAngle));
+    if (movedSinceLast > STALL_MOVE_THRESHOLD_DEG) {
+      lastAngle = current;
+      lastMoveMs = millis();
+    }
+
+    if (traceMoveEnabled && millis() - lastTraceMs >= 150) {
+      lastTraceMs = millis();
+      Serial.print("[move ");
+      Serial.print(moveId);
+      Serial.print("] t=");
+      Serial.print(millis() - start);
+      Serial.print("ms angle=");
+      Serial.print(current, 2);
+      Serial.print(" duty=");
+      Serial.print(CONTINUOUS_FEED_DUTY);
+      Serial.print(" dir=");
+      Serial.print(realForward ? "FWD" : "REV");
+      Serial.print(" sinceMotion=");
+      Serial.print(millis() - lastMoveMs);
+      Serial.println("ms");
+    }
+
+    if (millis() - lastMoveMs > STALL_TIMEOUT_MS) {
+      brakeAll();
+      Serial.print("[move ");
+      Serial.print(moveId);
+      Serial.println("] ERROR: stall detected during continuous feed, aborted");
+      Serial.print("  current=");
+      Serial.print(current, 2);
+      Serial.print(" deg | elapsed=");
+      Serial.print(millis() - start);
+      Serial.print("ms | duty=");
+      Serial.print(CONTINUOUS_FEED_DUTY);
+      Serial.print(" dir=");
+      Serial.print(realForward ? "FWD" : "REV");
+      Serial.print(" | ");
+      printMagnetLine(true);
+      targetAngleDeg = readAngleDeg();
+      return;
+    }
+
+    delay(5);
+  }
+
+  brakeAll();
+  targetAngleDeg = readAngleDeg();
+  const unsigned long elapsed = millis() - start;
+  Serial.print("[move ");
+  Serial.print(moveId);
+  Serial.print("] continuous feed ended at ");
+  Serial.print(targetAngleDeg, 2);
+  Serial.println(" deg (button released)");
+
+  // PEEL-after-forward, same reasoning as moveToAngle(): timed to match
+  // how long this feed ran, only triggered by a normal button-release stop
+  // (not by the fault/stall aborts above, which return early).
+  if (realForward) {
+    Serial.print("[move ");
+    Serial.print(moveId);
+    Serial.print("] PEEL: running rear motor (B) for ");
+    Serial.print(elapsed);
+    Serial.println("ms (matches this feed's duration)");
+    runPeelFor(elapsed);
+    Serial.print("[move ");
+    Serial.print(moveId);
+    Serial.println("] PEEL complete");
+  }
+}
+
+// PEEL command: drives ONLY motor B (rear motor, pulls cover tape) forward
+// for a fixed duration. Motor A is untouched (the sprocket wheel doesn't
+// move). Motor B has no encoder, so this is necessarily a timed open-loop
+// drive rather than a measured distance - PEEL_DURATION_MS is a tuning
+// knob, not a measured amount of tape. This is the *manual* peel (GO+
+// double-tap, or serial PEEL); moveToAngle()/continuousFeed() also run an
+// automatic peel after a real-world-forward move/feed, timed to match how
+// long that move took instead of PEEL_DURATION_MS - see their PEEL
+// sections.
+void peelTape() {
+  const unsigned long moveId = ++moveSeq;
+  Serial.print("[move ");
+  Serial.print(moveId);
+  Serial.println("] PEEL: driving rear motor (B) forward");
+  runPeelFor(PEEL_DURATION_MS);
+  Serial.print("[move ");
+  Serial.print(moveId);
+  Serial.println("] PEEL complete");
 }
 
 // ---------------------------
@@ -513,7 +837,12 @@ void calibrateZero() {
 // ---------------------------
 void printStatus() {
   const float angle = readAngleDeg();
-  const float toothPos = angle / DEG_PER_TOOTH;
+  // Tooth position, counted in the same direction as a "+1 tooth" forward
+  // jog (i.e. using the signed TOOTH_STEP_DEG, not raw DEG_PER_TOOTH), so
+  // it increases the same way T<index>/STEP+ do instead of running
+  // backwards from them when RAW_ANGLE_INCREASE_IS_REVERSE is set.
+  float toothPos = fmodf(angle / TOOTH_STEP_DEG, (float)TOOTH_COUNT);
+  if (toothPos < 0) toothPos += TOOTH_COUNT;
 
   Serial.print("angle=");
   Serial.print(angle, 2);
@@ -544,12 +873,16 @@ void printHelp() {
   Serial.println("  STEP+0.5    move +0.5 tooth (4.5 deg)");
   Serial.println("  STEP-0.5    move -0.5 tooth");
   Serial.println("  ZERO        re-run still-duty (zero point) calibration");
-  Serial.println("  STOP        brake motor A immediately");
+  Serial.println("  STOP        brake motors A and B immediately");
+  Serial.println("  PEEL        run rear motor (B) forward for PEEL_DURATION_MS, timed only");
   Serial.println("  STATUS      print angle/target/calibration/I2C error state");
   Serial.println("  TRACE ON    print live progress (angle/err/duty) during moves");
   Serial.println("  TRACE OFF   silence live move progress, keep abort details");
   Serial.println("  HELP / ?    show this text");
-  Serial.println("Hardware: one button jogs +1 tooth (fwd), the other jogs -1 tooth (rev).");
+  Serial.println("Hardware, per jog button (fwd = +1 tooth, rev = -1 tooth):");
+  Serial.println("  tap          jog one tooth (fwd also peels afterward, timed to match; rev doesn't)");
+  Serial.println("  hold         continuous feed until released (fwd peels after release; rev doesn't)");
+  Serial.println("  double-tap   fwd button only: PEEL now (motor B only, wheel doesn't move)");
   Serial.println("No hardware abort button: a move ends via target/stall/timeout/fault only.");
 }
 
@@ -565,14 +898,15 @@ void handleSerialLine(String line) {
 
   if (upper == "STATUS") { printStatus(); return; }
   if (upper == "ZERO") { calibrateZero(); return; }
-  if (upper == "STOP") { brakeMotorA(); Serial.println("Stopped."); return; }
+  if (upper == "STOP") { brakeAll(); Serial.println("Stopped."); return; }
   if (upper == "HELP" || upper == "?") { printHelp(); return; }
   if (upper == "TRACE ON") { traceMoveEnabled = true; Serial.println("Move trace: ON"); return; }
   if (upper == "TRACE OFF") { traceMoveEnabled = false; Serial.println("Move trace: OFF"); return; }
+  if (upper == "PEEL") { peelTape(); return; }
 
   if (upper.startsWith("STEP")) {
     const float steps = upper.substring(4).toFloat(); // tooth units, supports 0.5
-    const float deltaDeg = steps * DEG_PER_TOOTH;
+    const float deltaDeg = steps * TOOTH_STEP_DEG;
     targetAngleDeg = normalizeDeg(targetAngleDeg + deltaDeg);
     Serial.print("Target -> ");
     Serial.print(targetAngleDeg, 2);
@@ -584,7 +918,7 @@ void handleSerialLine(String line) {
   if (upper.startsWith("T")) {
     int idx = upper.substring(1).toInt();
     idx = ((idx % TOOTH_COUNT) + TOOTH_COUNT) % TOOTH_COUNT;
-    targetAngleDeg = idx * DEG_PER_TOOTH;
+    targetAngleDeg = normalizeDeg(idx * TOOTH_STEP_DEG);
     Serial.print("Target tooth ");
     Serial.print(idx);
     Serial.print(" -> ");
@@ -620,7 +954,7 @@ void setup() {
   pinMode(PIN_nFAULT, INPUT_PULLUP);
 
   brakeMotorA();
-  lockMotorBOff(); // motor B pins set once here, never touched again
+  initMotorBPins(); // motor B pins set to a safe braked state; driven later via driveMotorB()
 
   digitalWrite(PIN_nSLEEP, HIGH); // wake DRV8833
 
@@ -678,28 +1012,40 @@ void loop() {
   }
 
   if (digitalRead(PIN_nFAULT) == LOW) {
-    brakeMotorA();
+    brakeAll();
     if (now - lastFaultLogMs >= 500) {
       lastFaultLogMs = now;
-      Serial.println("FAULT asserted on DRV8833 -> motor A braked");
+      Serial.println("FAULT asserted on DRV8833 -> motors A and B braked");
     }
     return;
   }
 
-  if (buttonPressed(PIN_GO_FWD_INPUT, lastGoFwdEdgeMs)) {
-    targetAngleDeg = normalizeDeg(targetAngleDeg + DEG_PER_TOOTH);
-    Serial.print("[GO+] jog +1 tooth -> target ");
-    Serial.print(targetAngleDeg, 2);
-    Serial.println(" deg");
-    commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
+  if (buttonJustPressed(PIN_GO_FWD_INPUT, lastGoFwdEdgeMs)) {
+    const ButtonGesture gesture = classifyPress(PIN_GO_FWD_INPUT, lastGoFwdEdgeMs, /*allowDoubleTap=*/true);
+    if (gesture == GESTURE_HELD) {
+      continuousFeed(/*forward=*/true, PIN_GO_FWD_INPUT);
+    } else if (gesture == GESTURE_DOUBLE_TAP) {
+      peelTape();
+    } else {
+      targetAngleDeg = normalizeDeg(targetAngleDeg + TOOTH_STEP_DEG);
+      Serial.print("[GO+] jog +1 tooth -> target ");
+      Serial.print(targetAngleDeg, 2);
+      Serial.println(" deg");
+      commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
+    }
   }
 
-  if (buttonPressed(PIN_GO_REV_INPUT, lastGoRevEdgeMs)) {
-    targetAngleDeg = normalizeDeg(targetAngleDeg - DEG_PER_TOOTH);
-    Serial.print("[GO-] jog -1 tooth -> target ");
-    Serial.print(targetAngleDeg, 2);
-    Serial.println(" deg");
-    commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
+  if (buttonJustPressed(PIN_GO_REV_INPUT, lastGoRevEdgeMs)) {
+    const ButtonGesture gesture = classifyPress(PIN_GO_REV_INPUT, lastGoRevEdgeMs, /*allowDoubleTap=*/false);
+    if (gesture == GESTURE_HELD) {
+      continuousFeed(/*forward=*/false, PIN_GO_REV_INPUT);
+    } else {
+      targetAngleDeg = normalizeDeg(targetAngleDeg - TOOTH_STEP_DEG);
+      Serial.print("[GO-] jog -1 tooth -> target ");
+      Serial.print(targetAngleDeg, 2);
+      Serial.println(" deg");
+      commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
+    }
   }
 
   while (Serial.available()) {

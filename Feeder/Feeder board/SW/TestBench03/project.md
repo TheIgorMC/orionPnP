@@ -5,9 +5,21 @@ magnetic rotary encoder on the sprocket shaft so the wheel can be commanded
 to an absolute angle (or a tooth step) and the firmware closes the loop
 against real position feedback instead of running open-loop.
 
-DRV8833 channel A drives the sprocket motor. **DRV8833 channel B is wired
-for board compatibility only and is never driven** — its inputs are set to
-a hard brake once in `setup()` and are never touched again.
+DRV8833 channel A drives the front (tape-feed) sprocket motor,
+closed-loop via the AS5600. DRV8833 channel B drives the rear (peel)
+motor, which pulls the cover tape — it has **no position feedback of its
+own**, so it's always driven open-loop, fixed on/off (no PWM/variable
+speed). Motor B is only ever driven:
+
+- **after** motor A completes a move/feed that turns out to be in the
+  real-world **forward** direction (tap-jog, `STEP+`/`T`/`A` commands that
+  move forward, or forward continuous feed) — motor B then runs alone for
+  exactly as long as that move/feed took. It is **never** driven for A's
+  reverse motion, and never runs *while* A is moving (sequential, not
+  concurrent — see "PEEL-after-forward, continuous feed, and the manual
+  PEEL command" below for why).
+- alone, for a fixed duration, on the manual `PEEL` command (GO+
+  double-tap or serial `PEEL`).
 
 Sketch files:
 
@@ -32,32 +44,42 @@ accounting for encoder noise and mechanical backlash.
 
 Control inputs (buttons to GND, `INPUT_PULLUP`):
 
-- GO+ input: `PB12` — jogs the wheel +1 tooth (forward) when idle
-- GO- input: `PB13` — jogs the wheel -1 tooth (reverse) when idle
+- GO+ input: `PB12` — forward jog button
+- GO- input: `PB13` — reverse jog button
 
-There is **no hardware abort/STOP button**. Both inputs are edge-triggered
-jogs, only acted on between moves (`loop()` polls them; `moveToAngle()`
-blocks synchronously and does not check any button or Serial input while a
-move is in progress). A move can only end via reaching target, the stall
-detector (800ms no motion), the 6s move timeout, or `nFAULT`. The serial
-`STOP` command still exists but likewise only takes effect when idle, for
-the same reason.
+Each button reads three gestures (see "PEEL-after-forward, continuous
+feed, and the manual PEEL command" below for full behavior):
+
+- **tap** — jog one tooth
+- **hold** past `LONG_PRESS_MS` — continuous feed until released
+- **double-tap** (GO+ only) — `PEEL`
+
+There is **no hardware abort/STOP button**. Buttons are only acted on
+between moves/feeds (`loop()` polls them; `moveToAngle()` and
+`continuousFeed()` block synchronously and do not check Serial input while
+running — `continuousFeed()` does poll its own triggering button directly,
+to know when to stop). A single move can only end via reaching target, the
+stall detector (800ms no motion), the 6s move timeout, or `nFAULT`; a
+continuous feed ends via button release, the stall detector, or `nFAULT`
+(it has no timeout, since duration is however long the button is held).
+The serial `STOP` command still exists but likewise only takes effect when
+idle, for the same reason.
 
 DRV8833 logic pins:
 
-- `AIN1` -> `PA8` (PWM, forward duty for the sprocket motor)
-- `AIN2` -> `PA9` (PWM, reverse duty for the sprocket motor)
-- `BIN1` -> `PA10` (**unused**, held HIGH/brake for board compatibility)
-- `BIN2` -> `PB9` (**unused**, held HIGH/brake for board compatibility)
+- `AIN1` -> `PA8` (PWM, forward duty for the front/tape-feed motor)
+- `AIN2` -> `PA9` (PWM, reverse duty for the front/tape-feed motor)
+- `BIN1` -> `PA10` (rear/peel motor, fixed on/off — no PWM, see below)
+- `BIN2` -> `PB9` (rear/peel motor, fixed on/off — no PWM, see below)
 - `nSLEEP` -> `PB14` (set HIGH to enable driver)
 - `nFAULT` -> `PB15` (input, active LOW)
 
 DRV8833 power and motor pins (not MCU GPIO):
 
-- `VM` -> motor supply (5V to 10.8V as valid for your motor)
+- `VM` -> motor supply (5V to 10.8V as valid for your motors)
 - `GND` -> common ground with Blackpill
-- `AOUT1`, `AOUT2` -> sprocket motor terminals
-- `BOUT1`, `BOUT2` -> not connected to any motor (channel unused)
+- `AOUT1`, `AOUT2` -> front/tape-feed motor terminals
+- `BOUT1`, `BOUT2` -> rear/peel motor terminals
 
 AS5600 magnetic encoder (I2C1):
 
@@ -86,6 +108,15 @@ SDA/SCL. If you're wiring a bare AS5600 chip instead of a breakout, add
   revolution (mount it on the wheel shaft itself, or on any 1:1 shaft
   coupled to it — not through a gear reduction, or the tooth math below no
   longer applies).
+- If `STATUS`/move logs show `health=WEAK` (`ML=1`) with a low-ish `AGC`
+  and `MAGNITUDE` reading well under what you saw at initial setup, the
+  magnet is too far from the chip — move it closer, within the 0.5mm–3mm
+  range above. A marginal/weak signal like this is also the most likely
+  cause of an intermittent `ERROR: magnet lost during move (MD=0)` abort
+  that happens within milliseconds of a normal read (i.e. it isn't a
+  sustained loss, just the reading flickering across the detection
+  threshold) — fix the gap rather than treating that abort as a software
+  bug.
 
 ## Command protocol (USB serial, 115200 baud, newline terminated)
 
@@ -95,8 +126,11 @@ SDA/SCL. If you're wiring a bare AS5600 chip instead of a breakout, add
   current commanded target
 - `STEP+0.5` / `STEP-0.5` — move by half a tooth (±4.5°)
 - `ZERO` — re-run the zero-point (still-duty) auto-calibration on demand
-- `STOP` — brake motor A immediately (only takes effect when idle; a move in
-  progress cannot be interrupted this way, see Pin map above)
+- `STOP` — brake motors A and B immediately (only takes effect when idle; a
+  move or continuous feed in progress cannot be interrupted this way, see
+  Pin map above)
+- `PEEL` — run the rear/peel motor (B) forward for `PEEL_DURATION_MS`; motor
+  A is untouched. Serial equivalent of the GO+ double-tap.
 - `STATUS` — print current angle, tooth position, target, magnet health
   (`MD`/`ML`/`MH`, `AGC`, `MAGNITUDE`, plus a one-word `health` verdict:
   `OK`/`WEAK`/`STRONG`/`NONE`), calibrated duty values, I2C error count, and
@@ -105,9 +139,74 @@ SDA/SCL. If you're wiring a bare AS5600 chip instead of a breakout, add
   default); see "Diagnosing a move" below
 - `HELP` / `?` — print the command list
 
-Hardware buttons mirror a subset of this: GO+ jogs +1 tooth, GO- jogs -1
-tooth, both usable without a serial terminal attached. There is no hardware
-equivalent of `STOP`.
+Hardware buttons cover a superset of this: GO+ tap jogs +1 tooth then
+peels afterward (timed to match), GO- tap jogs -1 tooth only, either
+button held runs continuous feed (GO+ peels after release), GO+
+double-tapped runs `PEEL` immediately — all usable without a serial
+terminal attached. There is no hardware equivalent of `STOP`.
+
+## PEEL-after-forward, continuous feed, and the manual PEEL command
+
+Motor B (rear/peel) has no encoder, so none of its behavior here is
+closed-loop — it's either "run alone for exactly as long as A's last
+forward move/feed took" or "run open-loop for a fixed time." Related
+tuning knobs, all at the top of `src/main.cpp`:
+
+- `LONG_PRESS_MS` (350) — hold a jog button past this and it's a long-press
+  instead of a tap.
+- `DOUBLE_TAP_WINDOW_MS` (350) — a second GO+ tap starting within this long
+  after the first tap's release counts as a double-tap.
+- `PEEL_DURATION_MS` (400) — how long the *manual* `PEEL` command drives
+  motor B. This is a timed duration, not a measured tape length (no
+  feedback exists to measure it) — tune it to how much cover tape one
+  manual peel should pull for your mechanism. It does **not** apply to the
+  automatic peel described below, which is timed to the move instead.
+- `CONTINUOUS_FEED_DUTY` (defaults to `FAST_DUTY`) — motor A's duty during
+  continuous feed. There's no target to creep toward while free-running,
+  so this is the only speed used.
+- `INVERT_DIRECTION_B` — flip if motor B runs backwards from what's
+  expected (independent of `INVERT_DIRECTION`, which is motor A only).
+
+**PEEL-after-forward:** whenever a move (`moveToAngle()` — tap-jog, `STEP`,
+`T`, `A`) or a continuous feed turns out to be in the real-world forward
+direction, motor B does **not** run concurrently with motor A. Instead,
+once A finishes (reaches target, or the button is released for continuous
+feed), motor B runs alone at its own fixed full-power duty for exactly as
+long as A's move/feed just took, then brakes. Motor B has no speed
+feedback of its own, so there was no way to know how far it had actually
+travelled if run concurrently with A at A's (variable, creep-then-fast)
+duty — running it afterward, timed to A's elapsed duration, is the
+approximation used instead. A's reverse motion never triggers this. A
+failed/aborted move or feed (stall, timeout, fault, magnet loss) does
+**not** trigger it either — only a clean completion does.
+
+**Continuous feed (long-press):** holding either jog button past
+`LONG_PRESS_MS` switches from "jog one tooth" to "run continuously at
+`CONTINUOUS_FEED_DUTY` until the button is released," ignoring
+target/tolerance entirely — it's a manual speed-jog, not a closed-loop
+move, so there's no move timeout. The stall detector and `nFAULT` are still
+live during a continuous feed, same protection as a normal move. When the
+button is released, motor A brakes and `targetAngleDeg` is resynced to the
+real measured angle — same reasoning as the target auto-resync described
+below, so the next tap/hold starts from where the wheel actually is — and
+then, if the feed was forward, PEEL-after-forward runs motor B for the
+total hold duration.
+
+**Manual PEEL (GO+ double-tap, or serial `PEEL`):** drives only motor B
+forward for the fixed `PEEL_DURATION_MS`, immediately, with no associated
+move. Motor A is untouched — the sprocket wheel doesn't move. `nFAULT`
+still aborts it early, but there's no other way to interrupt a peel in
+progress (same "no hardware abort mid-action" reasoning as moves).
+
+**Gesture detection implementation note:** `classifyPress()` blocks (a
+short, bounded busy-wait, same style as the rest of this firmware) to tell
+tap/double-tap/hold apart before the caller acts — for a hold, it returns
+as soon as `LONG_PRESS_MS` is crossed while the button is *still* held, and
+the caller (`continuousFeed()`) then polls that same pin directly in its
+own loop to know when to stop. This means a GO+ tap's jog doesn't start
+until the double-tap window has elapsed with no second tap — by design, to
+disambiguate it from a double-tap; GO- has no double-tap gesture, so its
+taps register immediately on release.
 
 ## Auto zero-point calibration
 
@@ -172,21 +271,67 @@ automatically on every boot.
   (`i2cErrors=`).
 
 Tuning knobs live at the top of `src/main.cpp`: `ANGLE_TOLERANCE_DEG`,
-`CREEP_THRESHOLD_DEG`, `FAST_DUTY`, `INVERT_DIRECTION` (flip if the wheel
-turns the wrong way relative to commanded sign), and the `CAL_*` constants
-for calibration behavior.
+`CREEP_THRESHOLD_DEG`, `FAST_DUTY`, and the `CAL_*` constants for
+calibration behavior.
+
+There are two completely different "wrong direction" fixes here, at two
+different layers. Flipping the wrong one for a given symptom makes things
+*worse*, not better — each one individually breaks a different invariant:
+
+- **`INVERT_DIRECTION`** (default `false`) — the motor/encoder
+  self-consistency flag. The whole closed loop's convergence depends on
+  "driving forward makes the raw angle reading move toward the target";
+  flipping this when that's *not* the actual problem breaks that
+  invariant and makes the loop fight itself. Symptom that means you
+  actually need this one: a move drives away from target, error keeps
+  growing instead of shrinking, and it eventually times out after nearly a
+  full revolution.
+- **`RAW_ANGLE_INCREASE_IS_REVERSE`** (default `true` on this bench) — a
+  pure labeling fact, completely separate from the loop's internal
+  self-consistency: "does driving the raw AS5600 angle to increase count
+  as this mechanism's real-world forward, or reverse?" Everything that
+  needs to translate human intent (which way is `+1 tooth`, which way
+  `T<index>` counts, when the automatic PEEL-after-forward triggers, which
+  label a log line prints) reads this one fact via `TOOTH_STEP_DEG` /
+  `toRealForward()`, instead of each place being flipped independently and
+  risking drifting out of sync with each other. Symptom that means you
+  need *this* one, not `INVERT_DIRECTION`: moves/jogs complete correctly —
+  no fighting, no runaway, no timeout — but the resulting real-world
+  direction is backwards from what the button/command implies. Confirmed
+  needed on this bench: `STEP-2` (a pure target-angle change, no buttons
+  involved) completed cleanly but in the physically-backwards direction —
+  exactly this symptom, not `INVERT_DIRECTION`'s.
+
+If you ever need to re-derive which one applies: change nothing about the
+motor/encoder wiring, run a `STEP` command, and watch the `[move N]` trace
+in the log (see "Diagnosing a move" below). If `err` shrinks steadily to
+zero and the move completes normally, the loop is self-consistent — only
+`RAW_ANGLE_INCREASE_IS_REVERSE` should ever be touched, regardless of which
+real-world direction it ends up moving. If `err` grows instead of shrinking
+and the move times out after nearly a full revolution, that's
+`INVERT_DIRECTION`.
+
+Motor B / gesture tuning (`INVERT_DIRECTION_B`, `LONG_PRESS_MS`,
+`DOUBLE_TAP_WINDOW_MS`, `PEEL_DURATION_MS`, `CONTINUOUS_FEED_DUTY`) is
+covered in "PEEL-after-forward, continuous feed, and the manual PEEL
+command" above.
 
 ### Diagnosing a move
 
-Every commanded move (`GO` button, `STEP`, `T`, `A`) is tagged with a
-sequence number, e.g. `[move 12]`, so its lines can be told apart from the
-3-second `STATUS` heartbeat and from other moves in the log:
+Every commanded move, continuous feed, or `PEEL` is tagged with a sequence
+number, e.g. `[move 12]`, so its lines can be told apart from the 3-second
+`STATUS` heartbeat and from each other in the log. Continuous feed reuses
+the same `[move N]` start/trace/abort shape as a normal move (just without
+a `target`/`err`, since it has none); `PEEL` only logs a start and an
+end/abort line, since it's a plain timed drive with no angle to trace:
 
 - `[move N] start=... target=... err=...` — printed once when the move
   begins.
 - `[move N] t=...ms angle=... err=... duty=... dir=... sinceMotion=...ms` —
   printed roughly every 150ms while the move is in progress (`TRACE ON`,
-  the default; disable with `TRACE OFF` if it's too noisy).
+  the default; disable with `TRACE OFF` if it's too noisy). `dir=` is the
+  real-world direction (via `toRealForward()`), not the raw motor-pin
+  sense, so it matches what you'd actually see the wheel do.
 - On any abort (stall, timeout, fault, or magnet loss), a one-line
   reason is followed by a detail line with `start`/`target`/`current`/`err`,
   `elapsed`/`sinceMotion`, the `duty`/`dir` that was being driven, and a
@@ -194,6 +339,10 @@ sequence number, e.g. `[move 12]`, so its lines can be told apart from the
   genuinely flat, duty at `FAST_DUTY`) apart from a sensor problem (`health`
   not `OK`, or repeated `WARN: AS5600 I2C read failed`) or a stale-target
   problem (large `err` on what should have been a small jog).
+- On a clean completion that turned out to be real-world-forward, two more
+  lines follow under the *same* `[move N]` tag: `PEEL: running rear motor
+  (B) for ...ms (matches this move's duration)` and `PEEL complete` — this
+  is the automatic PEEL-after-forward described above, not a new move.
 
 **Motor spinning with no move in progress:** `moveToAngle()` runs
 synchronously, so `loop()`'s 3-second `STATUS` heartbeat can only print
