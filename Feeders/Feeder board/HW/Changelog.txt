@@ -2,7 +2,15 @@
 [NW] = Not working after testing
 
 
-[0.2a]
+[0.2]
+- New design for HW revision 3
+- Switched to AS5600 magnetic encoder for sprocket position after bench test validated as viable
+- Reduced BOM even further
+- Reduced footprint to reduce cost
+- Switched to 1 LED and 2 buttons
+
+
+[0.2a] [NP]
 - Total redesign according to HW revision 2
 - Improved pricing by using resettable fuse and fewer components
 - Switched to powerPad variant of the motor driver for better availability
