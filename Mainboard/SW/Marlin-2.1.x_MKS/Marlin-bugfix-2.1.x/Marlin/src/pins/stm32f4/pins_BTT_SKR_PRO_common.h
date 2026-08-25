@@ -259,8 +259,13 @@
 //
 // Fans
 //
-#define FAN0_PIN                            PC8   // Fan0
-#define FAN1_PIN                            PE5   // Fan1
+// FAN0/FAN1 moved off the physical FAN0/FAN1 headers (PC8/PE5) onto unused EXP1
+// pins so Marlin's fan-management ISR no longer drives or protects PC8/PE5. This
+// frees the physical FAN0/FAN1 connectors for M42-controlled outputs (e.g. vacuum
+// pump / valve relays) without Marlin fighting the write or blocking it as a
+// protected pin.
+#define FAN0_PIN                             PD11    // EXP1_03_PIN; was PC8 (physical FAN0 header, now free for M42)
+#define FAN1_PIN                             PD10    // EXP1_04_PIN; was PE5 (physical FAN1 header, now free for M42)
 
 #ifndef E0_AUTO_FAN_PIN
   #define E0_AUTO_FAN_PIN               FAN1_PIN

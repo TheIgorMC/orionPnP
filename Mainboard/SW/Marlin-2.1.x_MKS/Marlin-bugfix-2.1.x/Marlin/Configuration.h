@@ -1335,7 +1335,7 @@
  * Override with M92 (when enabled below)
  *                                      X, Y, Z [, I [, J [, K...]]], E0 [, E1[, E2...]]
  */
-#define DEFAULT_AXIS_STEPS_PER_UNIT   { 100, 100, 160, 8.889, 8.889 }
+#define DEFAULT_AXIS_STEPS_PER_UNIT   { 100, 100, 80, 8.889, 8.889 }
 
 /**
  * Enable support for M92. Disable to save at least ~530 bytes of flash.
@@ -1347,7 +1347,7 @@
  * Override with M203
  *                                      X, Y, Z [, I [, J [, K...]]], E0 [, E1[, E2...]]
  */
-#define DEFAULT_MAX_FEEDRATE          { 510, 510, 20, 1080, 1080 }
+#define DEFAULT_MAX_FEEDRATE          { 510, 510, 80, 1080, 1080 }
 
 //#define LIMITED_MAX_FR_EDITING        // Limit edit via M203 or LCD to DEFAULT_MAX_FEEDRATE * 2
 #if ENABLED(LIMITED_MAX_FR_EDITING)
@@ -1871,8 +1871,8 @@
 
 // Invert the stepper direction. Change (or reverse the motor connector) if an axis goes the wrong way.
 #define INVERT_X_DIR true
-#define INVERT_Y_DIR false
-#define INVERT_Z_DIR false
+#define INVERT_Y_DIR true
+#define INVERT_Z_DIR true
 #define INVERT_I_DIR false
 #define INVERT_J_DIR false
 //#define INVERT_K_DIR false
@@ -2410,7 +2410,7 @@
 #endif
 
 // Homing speeds (linear=mm/min, rotational=°/min)
-#define HOMING_FEEDRATE_MM_M { (10*60), (10*60), (4*60), (30*60), (30*60) }
+#define HOMING_FEEDRATE_MM_M { (10*60), (10*60), (12*60), (30*60), (30*60) }
 
 // Edit homing feedrates with M210 and MarlinUI menu items
 //#define EDITABLE_HOMING_FEEDRATE
