@@ -47,9 +47,18 @@ const uint8_t AS5600_REG_MAGNITUDE = 0x1B; // + 0x1C
 
 // ---------------------------
 // Wheel geometry
+//
+// Sprocket holes on carrier tape are spaced 4mm apart regardless of tape
+// width (EIA-481 standard) - one sprocket tooth engages one hole, so one
+// tooth of travel is always 4mm of tape, independent of what's on the
+// tape. Everything below derives from that one physical constant plus the
+// wheel's tooth count.
 // ---------------------------
 const int TOOTH_COUNT = 40;
-const float DEG_PER_TOOTH = 360.0f / TOOTH_COUNT; // 9.0 deg
+const float DEG_PER_TOOTH = 360.0f / TOOTH_COUNT;       // 9.0 deg
+const float DEG_PER_HALF_TOOTH = DEG_PER_TOOTH / 2.0f;  // 4.5 deg
+const float SPROCKET_HOLE_PITCH_MM = 4.0f;              // EIA-481: fixed, all tape widths
+const float DEG_PER_MM = DEG_PER_TOOTH / SPROCKET_HOLE_PITCH_MM; // 2.25 deg/mm
 
 // ---------------------------
 // Motion / control tuning (unchanged from TestBench03/04)
@@ -208,6 +217,13 @@ void manualResetFeedConfig() {
   saveConfig();
 }
 
+// Fwd decls - defined with the rest of tape-zero/distance motion, further
+// down near commandMoveTo(); declared here so handleFrame() (RS485
+// transport, below) can call them without reordering the whole file.
+void setTapeZeroHere();
+void setFeedPitchMm(float mm);
+bool feedOnePitch(unsigned long timeoutMs);
+
 // ---------------------------
 // RS485 transport (USART0 + RE/DE on PIN_RS485_RE)
 // ---------------------------
@@ -259,6 +275,9 @@ constexpr uint8_t CMD_COMPONENT_INFO = 0xA0; // payload: [idHi,idLo,zeroHi,zeroL
 constexpr uint8_t CMD_SET_COMPONENT = 0x21;  // payload: [idHi,idLo] -> CMD_ACK
 constexpr uint8_t CMD_SET_FEED_CONFIG = 0x22; // payload: [zeroHi,zeroLo,feedHalfTeeth] -> CMD_ACK
 constexpr uint8_t CMD_RESET_CONFIG = 0x23;    // no payload -> CMD_ACK
+constexpr uint8_t CMD_ZERO_HERE = 0x24;       // no payload: capture current position as tape zero -> CMD_ACK
+constexpr uint8_t CMD_SET_PITCH_MM = 0x25;    // payload: [mm] (1 byte, whole mm) -> CMD_ACK
+constexpr uint8_t CMD_FEED_NEXT = 0x26;       // no payload: advance by configured pitch -> CMD_ACK/CMD_NACK
 
 constexpr uint8_t CMD_ACK = 0x82;
 constexpr uint8_t CMD_NACK = 0x83;
@@ -348,6 +367,23 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
     case CMD_RESET_CONFIG: {
       manualResetFeedConfig();
       sendFrame(CMD_ACK, nullptr, 0);
+      break;
+    }
+    case CMD_ZERO_HERE: {
+      setTapeZeroHere();
+      sendFrame(CMD_ACK, nullptr, 0);
+      break;
+    }
+    case CMD_SET_PITCH_MM: {
+      if (len < 1) { sendFrame(CMD_NACK, nullptr, 0); break; }
+      setFeedPitchMm((float)payload[0]);
+      sendFrame(CMD_ACK, payload, 1);
+      break;
+    }
+    case CMD_FEED_NEXT: {
+      if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) { sendFrame(CMD_NACK, nullptr, 0); break; }
+      const bool ok = feedOnePitch(MOVE_TIMEOUT_MS);
+      sendFrame(ok ? CMD_ACK : CMD_NACK, nullptr, 0);
       break;
     }
     default:
@@ -502,6 +538,29 @@ float angleErrorDeg(float target, float current) {
 }
 
 // ---------------------------
+// Distance <-> angle/step helpers
+//
+// The point of these: nothing that calls into motion should have to know
+// "a step is 9 degrees" - it should be able to say "advance 4mm" or
+// "advance 2 teeth" and get the same answer. mm is the source of truth
+// (it's what a tape/component datasheet actually specifies); everything
+// else derives from it via DEG_PER_MM.
+// ---------------------------
+float degForMm(float mm) { return mm * DEG_PER_MM; }
+float mmForDeg(float deg) { return deg / DEG_PER_MM; }
+
+// Rounds to the nearest half-tooth (2mm) - the finest step this wheel can
+// resolve, since DEG_PER_HALF_TOOTH is what feedHalfTeeth counts in.
+// Clamped to >=1 half-tooth: a zero-length feed isn't a valid pitch.
+uint8_t halfTeethForMm(float mm) {
+  const long n = lround(mm / (SPROCKET_HOLE_PITCH_MM / 2.0f));
+  return (uint8_t)constrain(n, 1, 255);
+}
+
+float degForHalfTeeth(uint8_t halfTeeth) { return halfTeeth * DEG_PER_HALF_TOOTH; }
+float mmForHalfTeeth(uint8_t halfTeeth) { return halfTeeth * (SPROCKET_HOLE_PITCH_MM / 2.0f); }
+
+// ---------------------------
 // Motor drive
 // ---------------------------
 void brakeMotorA() {
@@ -628,7 +687,76 @@ bool commandMoveTo(float target, unsigned long timeoutMs) {
 }
 
 // ---------------------------
-// Zero-point calibration (unchanged from TestBench04)
+// Tape zero + distance-based motion
+//
+// cfg.tapeZeroRaw is a 12-bit AS5600 count (0-4095, same representation
+// the AS5600 itself uses and the same units sent over the bus in
+// CMD_GET/SET_COMPONENT), marking "the currently loaded tape's first
+// pocket is aligned and ready to present a part". It's meaningless for a
+// different component - see setComponentId()'s reset-on-change behavior
+// above. Everything here is built on the mm<->degree helpers above plus
+// the existing commandMoveTo()/moveToAngle() safety machinery (stall/
+// timeout/fault handling) - none of that is duplicated, just parameterized
+// by distance instead of a raw target angle.
+// ---------------------------
+uint16_t angleDegToRaw12(float deg) {
+  return (uint16_t)lround(normalizeDeg(deg) * 4096.0f / 360.0f) & 0x0FFF;
+}
+
+float raw12ToAngleDeg(uint16_t raw) {
+  return (raw & 0x0FFF) * 360.0f / 4096.0f;
+}
+
+// Capture the wheel's current position as "zero" for whatever component is
+// currently loaded. Call this once the operator has jogged the wheel so
+// the first pocket is aligned under the pick nozzle. Leaves feedHalfTeeth
+// untouched - set that separately via setFeedPitchMm(), independently,
+// since pitch and zero-position are two separate calibration steps.
+void setTapeZeroHere() {
+  cfg.tapeZeroRaw = angleDegToRaw12(readAngleDeg());
+  saveConfig();
+}
+
+// Sets the per-pick feed distance from a physical pitch in mm (e.g. 2 for
+// fine/half-tooth-pitch parts, 4 for standard EIA-481 single-hole pitch,
+// 8/12/16/24 for wider multi-hole reels) - this is the "distance as a
+// parameter, auto-translated to steps" piece: callers (bus command or
+// debug port) never need to know or compute a tooth/half-tooth count.
+void setFeedPitchMm(float mm) {
+  cfg.feedHalfTeeth = halfTeethForMm(mm);
+  saveConfig();
+}
+
+// Relative move: advance (or retreat, if mm is negative) by a physical
+// distance from wherever the wheel currently is.
+bool moveByMm(float mm, unsigned long timeoutMs) {
+  targetAngleDeg = normalizeDeg(targetAngleDeg + degForMm(mm));
+  return commandMoveTo(targetAngleDeg, timeoutMs);
+}
+
+// Absolute move: go to a distance offset from the calibrated tape zero
+// (e.g. moveToTapeZeroPlusMm(0) returns to the first pocket;
+// moveToTapeZeroPlusMm(N * pitchMm) goes to the Nth pocket from zero).
+// Requires setTapeZeroHere() to have been called for the current
+// component - callers should check tapeZeroRaw != TAPE_ZERO_UNSET first.
+bool moveToTapeZeroPlusMm(float mm, unsigned long timeoutMs) {
+  const float zeroDeg = raw12ToAngleDeg(cfg.tapeZeroRaw);
+  targetAngleDeg = normalizeDeg(zeroDeg + degForMm(mm));
+  return commandMoveTo(targetAngleDeg, timeoutMs);
+}
+
+// Advance by exactly one configured pick pitch (cfg.feedHalfTeeth) from
+// the current position - what a real pick sequence calls between picks.
+bool feedOnePitch(unsigned long timeoutMs) {
+  return moveByMm(mmForHalfTeeth(cfg.feedHalfTeeth), timeoutMs);
+}
+
+// ---------------------------
+// Motor-duty zero-point calibration (unchanged from TestBench04)
+//
+// NOT the tape zero above - this is DRV8833 electrical characterization
+// (still/breakaway PWM duty), unrelated to which component/tape is
+// loaded, and reruns on every boot regardless of tapeZeroRaw/feedHalfTeeth.
 // ---------------------------
 bool rampFindBreakaway(bool forward, float baselineDeg, int &stillMaxOut, int &breakawayOut) {
   stillMaxOut = CAL_START_DUTY - CAL_STEP_DUTY;
@@ -688,9 +816,12 @@ void printStatus() {
   Serial1.print(F(" component="));
   if (cfg.componentId == COMPONENT_ID_UNSET) Serial1.print(F("UNSET"));
   else Serial1.print(cfg.componentId);
-  Serial1.print(F(" feedHalfTeeth="));
+  Serial1.print(F(" tapeZero="));
+  if (cfg.tapeZeroRaw == TAPE_ZERO_UNSET) Serial1.print(F("UNSET"));
+  else Serial1.print(cfg.tapeZeroRaw);
+  Serial1.print(F(" pitchMm="));
   if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) Serial1.print(F("UNSET"));
-  else Serial1.print(cfg.feedHalfTeeth);
+  else Serial1.print(mmForHalfTeeth(cfg.feedHalfTeeth), 1);
   Serial1.print(F(" angle="));
   Serial1.print(readAngleDeg(), 2);
   Serial1.print(F(" target="));
@@ -710,10 +841,22 @@ void printHelp() {
   Serial1.println(F("                  bypasses CMD_DISCOVER/CMD_ASSIGN_ADDR - for testing"));
   Serial1.println(F("                  motion/config commands without a host on the bus yet"));
   Serial1.println(F("  COMPONENT <id>  set loaded component id (mirrors CMD_SET_COMPONENT);"));
-  Serial1.println(F("                  resets feed config if id actually changed"));
-  Serial1.println(F("  FEEDCFG <zeroRaw> <halfTeeth>   set tape zero + step size, persisted"));
-  Serial1.println(F("  RESETCFG        clear tape zero + step size only (keeps component id)"));
-  Serial1.println(F("  FEED            advance by the configured feedHalfTeeth (next pocket)"));
+  Serial1.println(F("                  resets tape zero + pitch if id actually changed"));
+  Serial1.println(F("  --- tape zero / pitch calibration ---"));
+  Serial1.println(F("  ZEROHERE        jog to the first pocket (STEP/T/A/buttons), then run this"));
+  Serial1.println(F("                  to capture the current position as tape zero"));
+  Serial1.println(F("  PITCH <mm>      set per-pick feed distance in mm (e.g. PITCH 4 for"));
+  Serial1.println(F("                  standard EIA-481, PITCH 2 for fine pitch, PITCH 8/12/16/24"));
+  Serial1.println(F("                  for wider multi-hole reels) - auto-translated to steps"));
+  Serial1.println(F("  RESETCFG        clear tape zero + pitch only (keeps component id)"));
+  Serial1.println(F("  --- distance-based motion (mm, not degrees/teeth) ---"));
+  Serial1.println(F("  GOTOZERO        move to the calibrated tape zero"));
+  Serial1.println(F("  GOMM <mm>       move to tape zero + mm (absolute, needs zero set)"));
+  Serial1.println(F("  MOVEMM <mm>     move by mm relative to current position"));
+  Serial1.println(F("  FEED            advance by the configured PITCH (next pocket)"));
+  Serial1.println(F("  --- low-level bus commands, for reference (see project.md) ---"));
+  Serial1.println(F("  FEEDCFG <zeroRaw 0-4095> <halfTeeth 1-255>  set both fields directly,"));
+  Serial1.println(F("                  same values CMD_SET_FEED_CONFIG takes over the bus"));
 }
 
 void handleDebugLine(String line) {
@@ -763,12 +906,43 @@ void handleDebugLine(String line) {
     return;
   }
   if (upper == "RESETCFG") { manualResetFeedConfig(); Serial1.println(F("Feed config reset.")); return; }
+  if (upper == "ZEROHERE") {
+    setTapeZeroHere();
+    Serial1.print(F("Tape zero set at raw=")); Serial1.println(cfg.tapeZeroRaw);
+    return;
+  }
+  if (upper.startsWith("PITCH ")) {
+    const float mm = upper.substring(6).toFloat();
+    if (mm <= 0) {
+      Serial1.println(F("Refused: pitch must be a positive mm value (e.g. PITCH 4)."));
+    } else {
+      setFeedPitchMm(mm);
+      Serial1.print(F("Pitch set: ")); Serial1.print(mm);
+      Serial1.print(F("mm -> feedHalfTeeth=")); Serial1.println(cfg.feedHalfTeeth);
+    }
+    return;
+  }
+  if (upper == "GOTOZERO") {
+    if (cfg.tapeZeroRaw == TAPE_ZERO_UNSET) {
+      Serial1.println(F("Refused: tape zero not set, run ZEROHERE first."));
+    } else {
+      moveToTapeZeroPlusMm(0.0f, MOVE_TIMEOUT_MS);
+    }
+    return;
+  }
+  if (upper.startsWith("GOMM ")) {
+    moveToTapeZeroPlusMm(upper.substring(5).toFloat(), MOVE_TIMEOUT_MS);
+    return;
+  }
+  if (upper.startsWith("MOVEMM ")) {
+    moveByMm(upper.substring(7).toFloat(), MOVE_TIMEOUT_MS);
+    return;
+  }
   if (upper == "FEED") {
     if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) {
-      Serial1.println(F("Refused: feedHalfTeeth not configured, run FEEDCFG first."));
+      Serial1.println(F("Refused: feedHalfTeeth not configured, run PITCH first."));
     } else {
-      targetAngleDeg = normalizeDeg(targetAngleDeg + cfg.feedHalfTeeth * (DEG_PER_TOOTH / 2.0f));
-      commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
+      feedOnePitch(MOVE_TIMEOUT_MS);
     }
     return;
   }

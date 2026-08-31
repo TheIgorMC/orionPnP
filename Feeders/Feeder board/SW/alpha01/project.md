@@ -175,18 +175,46 @@ fine/custom" are just named values a host UI might offer as shortcuts for
 what to write here, not three parallel storage slots — a loaded reel only
 ever has one active pitch at a time.
 
-**Not yet wired up:** `tapeZeroRaw` and `feedHalfTeeth` are stored and
-settable/gettable over the bus, but the closed-loop mover doesn't use them
-yet — `FEED` (debug command) advances by `feedHalfTeeth` relative to the
-current in-memory `targetAngleDeg`, not anchored to `tapeZeroRaw`. Wiring
-`tapeZeroRaw` in as the actual index-0 reference for feed moves is the
-next increment, not done in this pass.
-
 This is also explicitly separate from `calibrateZero()`/`stillDutyMax`
 elsewhere in this file — that's DRV8833 motor-duty characterization
 (electrical, unrelated to which tape is loaded) and still reruns on every
 boot regardless of component. Two different things named similarly by
 coincidence; don't conflate them.
+
+### Distance-based motion (mm in, steps out)
+
+`tapeZeroRaw`/`feedHalfTeeth` are now wired into actual motion, not just
+stored. The chain is: **mm → degrees → the existing `moveToAngle()`
+closed-loop mover** (stall/timeout/fault handling unchanged, none of it
+duplicated) — nothing above the mm-based helpers needs to know a step is
+9°, or that a sprocket hole is a specific angle at all:
+
+- `degForMm()`/`mmForDeg()` — the base conversion, from
+  `DEG_PER_MM = DEG_PER_TOOTH / SPROCKET_HOLE_PITCH_MM` (2.25°/mm — EIA-481
+  fixes sprocket holes at 4mm regardless of tape width, and the wheel
+  geometry from the TestBench03/04 bench tests gives 9°/tooth, so this is
+  just those two known constants combined).
+- `halfTeethForMm()` — rounds a physical pitch (mm) to the nearest
+  half-tooth (2mm, the finest step this wheel resolves), used by
+  `setFeedPitchMm()` so a host/operator only ever specifies a pitch in mm
+  (`PITCH 4`, `CMD_SET_PITCH_MM`) and never touches a tooth count directly.
+- `setTapeZeroHere()` — captures the current AS5600 position (as a 12-bit
+  count, `angleDegToRaw12()`) into `cfg.tapeZeroRaw` once the operator has
+  jogged the wheel (via `STEP`/`T`/`A`/the jog buttons) so the first pocket
+  is aligned. `ZEROHERE` / `CMD_ZERO_HERE`.
+- `moveByMm()` — relative move by a physical distance from wherever the
+  wheel currently is. `MOVEMM <mm>`.
+- `moveToTapeZeroPlusMm()` — absolute move to zero + an mm offset (e.g.
+  the Nth pocket = zero + N×pitch). `GOMM <mm>` / `GOTOZERO` (mm=0).
+- `feedOnePitch()` — advance by exactly the configured `feedHalfTeeth`,
+  what a real pick sequence calls between picks. `FEED` / `CMD_FEED_NEXT`.
+
+**Calibration flow in practice:** load a reel → `COMPONENT <id>` (or
+`CMD_SET_COMPONENT`, resets zero/pitch since this is a new/different
+component) → jog to the first pocket → `ZEROHERE` → `PITCH <mm>` for
+this reel's pitch → feeder is now ready; `FEED` advances one pick at a
+time from here, and both `tapeZeroRaw`/`feedHalfTeeth` persist across
+power cycles for as long as `componentId` doesn't change.
 
 ---
 
@@ -206,8 +234,6 @@ coincidence; don't conflate them.
   during discovery, which blocks byte processing for up to 200ms — fine
   with polling today since nothing else needs the CPU then, but worth
   revisiting once RX is interrupt-driven.
-- Wiring `tapeZeroRaw`/`feedHalfTeeth` into actual feed-move targeting
-  (see above) — currently just stored/exposed, not used by motion.
 - Discovery round timing/retry policy (how often the host re-polls, how
   many rounds before giving up on a round with a collision) isn't
   designed — alpha01 implements the feeder side of one exchange, not a
