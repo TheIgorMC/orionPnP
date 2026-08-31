@@ -200,26 +200,57 @@ duplicated) — nothing above the mm-based helpers needs to know a step is
   (`PITCH 4`, `CMD_SET_PITCH_MM`) and never touches a tooth count directly.
 - `setTapeZeroHere()` — captures the current AS5600 position (as a 12-bit
   count, `angleDegToRaw12()`) into `cfg.tapeZeroRaw` once the operator has
-  jogged the wheel (via `STEP`/`T`/`A`/the jog buttons) so the first pocket
-  is aligned. `ZEROHERE` / `CMD_ZERO_HERE`.
+  jogged the wheel so the sprocket hole belonging to the reel's first real
+  pocket is seated. `ZEROHERE` / `CMD_ZERO_HERE`.
 - `moveByMm()` — relative move by a physical distance from wherever the
   wheel currently is. `MOVEMM <mm>`.
-- `moveToTapeZeroPlusMm()` — absolute move to zero + an mm offset (e.g.
-  the Nth pocket = zero + N×pitch). `GOMM <mm>` / `GOTOZERO` (mm=0).
+- `moveToTapeZeroPlusMm()` — absolute move to zero + `PICK_OFFSET_MM` + an
+  mm offset (e.g. the Nth pocket = zero + N×pitch). `GOMM <mm>` /
+  `GOTOZERO` (mm=0).
 - `feedOnePitch()` — advance by exactly the configured `feedHalfTeeth`,
   what a real pick sequence calls between picks. `FEED` / `CMD_FEED_NEXT`.
 
-**Calibration flow in practice:** load a reel → `COMPONENT <id>` (or
-`CMD_SET_COMPONENT`, resets zero/pitch since this is a new/different
-component) → jog to the first pocket → `ZEROHERE` → `PITCH <mm>` for
-this reel's pitch → feeder is now ready; `FEED` advances one pick at a
-time from here, and both `tapeZeroRaw`/`feedHalfTeeth` persist across
-power cycles for as long as `componentId` doesn't change.
+### Tape zero calibration, v2 — separating the mechanical constant from the per-reel variable
+
+`ZEROHERE` originally captured one number that conflated two physically
+different things: (a) which sprocket hole is seated, and (b) the fine
+mechanical distance from a seated hole to where the camera/nozzle actually
+picks. (b) is geometry of the PCB/frame — identical on every feeder of
+this design — while (a) is the only thing that actually differs per reel
+(leader tape length before the first real component). Redoing a camera
+fine-tune every time you load a new reel was redoing (b) for no reason.
+
+Fixed now: **`PICK_OFFSET_MM`** (near the wheel-geometry constants) holds
+(b) as a single hardcoded constant, shared by every feeder running this
+firmware. It is **not** part of `FeederConfig`/EEPROM — it isn't per-unit
+or per-component data, it's a firmware-wide build constant. `tapeZeroRaw`
+now stores only (a) — a pure "which hole" reference — and
+`moveToTapeZeroPlusMm()` adds `PICK_OFFSET_MM` automatically at move time,
+so `GOTOZERO`/`GOMM` always land at the true pick point without it being
+baked into the stored zero value.
+
+**Practical effect on the calibration flow:**
+- **One-time, ever, on a reference unit:** use `MOVEMM` with a camera to
+  find the exact mm offset from a seated hole to the real pick point,
+  hardcode that as `PICK_OFFSET_MM`, reflash. Every feeder built to this
+  design shares it.
+- **Per reel, routinely:** load a reel → `COMPONENT <id>` (resets zero/
+  pitch if it's a different component) → jog with `STEP`/`T` (whole/half-
+  tooth increments only — no camera, no `MOVEMM`) until the first
+  pocket's hole is seated → `ZEROHERE` → `PITCH <mm>` for this reel's
+  pitch → ready. `FEED` advances one pick at a time from here, and
+  `tapeZeroRaw`/`feedHalfTeeth` persist across power cycles for as long
+  as `componentId` doesn't change.
+
+`PICK_OFFSET_MM` currently defaults to `0.0` (not yet measured on real
+hardware) — see the `TODO` comment at its definition.
 
 ---
 
 ## Open questions (not resolved here)
 
+- `PICK_OFFSET_MM` is a placeholder (`0.0`) — needs measuring once with a
+  camera on real hardware, per "Tape zero calibration, v2" above.
 - Modbus RTU vs. continuing/extending `OrionProtocol` — the flash/RAM/
   timing budget above says either is affordable; the choice is now a
   tooling/ecosystem one (Modbus gives off-the-shelf host libraries and

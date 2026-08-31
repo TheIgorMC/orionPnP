@@ -60,6 +60,15 @@ const float DEG_PER_HALF_TOOTH = DEG_PER_TOOTH / 2.0f;  // 4.5 deg
 const float SPROCKET_HOLE_PITCH_MM = 4.0f;              // EIA-481: fixed, all tape widths
 const float DEG_PER_MM = DEG_PER_TOOTH / SPROCKET_HOLE_PITCH_MM; // 2.25 deg/mm
 
+// Fixed mechanical offset from "a sprocket tooth is seated" to "the pick
+// window/camera position" - purely geometric (PCB/frame layout), so it's
+// the same on every feeder of this exact design, not per-unit or
+// per-component. Measure ONCE with a camera on a reference unit (jog with
+// MOVEMM to find it), then hardcode the result here - see project.md
+// "Tape zero calibration, v2". Left at 0.0 until that measurement exists;
+// ZEROHERE/GOTOZERO will be off by this amount until it's filled in.
+const float PICK_OFFSET_MM = 0.0f; // TODO: measure once, see comment above
+
 // ---------------------------
 // Motion / control tuning (unchanged from TestBench03/04)
 // ---------------------------
@@ -707,11 +716,18 @@ float raw12ToAngleDeg(uint16_t raw) {
   return (raw & 0x0FFF) * 360.0f / 4096.0f;
 }
 
-// Capture the wheel's current position as "zero" for whatever component is
-// currently loaded. Call this once the operator has jogged the wheel so
-// the first pocket is aligned under the pick nozzle. Leaves feedHalfTeeth
-// untouched - set that separately via setFeedPitchMm(), independently,
-// since pitch and zero-position are two separate calibration steps.
+// Capture the wheel's current position as the hole-aligned reference for
+// whatever component is currently loaded. Call this once the operator has
+// jogged the wheel (STEP/T - whole/half-tooth increments, no camera or
+// MOVEMM needed) so the sprocket hole belonging to the reel's first real
+// pocket is seated. PICK_OFFSET_MM (the fixed mechanical hole-to-pick-
+// window distance, same for every feeder of this design) is NOT baked in
+// here - it's added at use time by moveToTapeZeroPlusMm(), so
+// tapeZeroRaw stays a pure "which hole" reference, reusable even if
+// PICK_OFFSET_MM is later re-measured/changed.
+// Leaves feedHalfTeeth untouched - set that separately via
+// setFeedPitchMm(), independently, since pitch and zero-position are two
+// separate calibration steps.
 void setTapeZeroHere() {
   cfg.tapeZeroRaw = angleDegToRaw12(readAngleDeg());
   saveConfig();
@@ -734,13 +750,15 @@ bool moveByMm(float mm, unsigned long timeoutMs) {
   return commandMoveTo(targetAngleDeg, timeoutMs);
 }
 
-// Absolute move: go to a distance offset from the calibrated tape zero
-// (e.g. moveToTapeZeroPlusMm(0) returns to the first pocket;
-// moveToTapeZeroPlusMm(N * pitchMm) goes to the Nth pocket from zero).
-// Requires setTapeZeroHere() to have been called for the current
-// component - callers should check tapeZeroRaw != TAPE_ZERO_UNSET first.
+// Absolute move: go to a distance offset from the calibrated tape zero,
+// automatically including PICK_OFFSET_MM so mm=0 lands at the actual pick
+// point (not just "at a hole") - e.g. moveToTapeZeroPlusMm(0) goes to the
+// first pocket under the nozzle; moveToTapeZeroPlusMm(N * pitchMm) goes
+// to the Nth pocket from zero. Requires setTapeZeroHere() to have been
+// called for the current component - callers should check
+// tapeZeroRaw != TAPE_ZERO_UNSET first.
 bool moveToTapeZeroPlusMm(float mm, unsigned long timeoutMs) {
-  const float zeroDeg = raw12ToAngleDeg(cfg.tapeZeroRaw);
+  const float zeroDeg = raw12ToAngleDeg(cfg.tapeZeroRaw) + degForMm(PICK_OFFSET_MM);
   targetAngleDeg = normalizeDeg(zeroDeg + degForMm(mm));
   return commandMoveTo(targetAngleDeg, timeoutMs);
 }
@@ -843,16 +861,20 @@ void printHelp() {
   Serial1.println(F("  COMPONENT <id>  set loaded component id (mirrors CMD_SET_COMPONENT);"));
   Serial1.println(F("                  resets tape zero + pitch if id actually changed"));
   Serial1.println(F("  --- tape zero / pitch calibration ---"));
-  Serial1.println(F("  ZEROHERE        jog to the first pocket (STEP/T/A/buttons), then run this"));
-  Serial1.println(F("                  to capture the current position as tape zero"));
+  Serial1.println(F("  ZEROHERE        jog with STEP/T/buttons (whole/half-tooth, no camera"));
+  Serial1.println(F("                  needed) so the first pocket's sprocket hole is seated,"));
+  Serial1.println(F("                  then run this - PICK_OFFSET_MM (fixed, same on every"));
+  Serial1.println(F("                  feeder) is added automatically at move time, not here"));
   Serial1.println(F("  PITCH <mm>      set per-pick feed distance in mm (e.g. PITCH 4 for"));
   Serial1.println(F("                  standard EIA-481, PITCH 2 for fine pitch, PITCH 8/12/16/24"));
   Serial1.println(F("                  for wider multi-hole reels) - auto-translated to steps"));
   Serial1.println(F("  RESETCFG        clear tape zero + pitch only (keeps component id)"));
   Serial1.println(F("  --- distance-based motion (mm, not degrees/teeth) ---"));
-  Serial1.println(F("  GOTOZERO        move to the calibrated tape zero"));
-  Serial1.println(F("  GOMM <mm>       move to tape zero + mm (absolute, needs zero set)"));
-  Serial1.println(F("  MOVEMM <mm>     move by mm relative to current position"));
+  Serial1.println(F("  GOTOZERO        move to the calibrated pick point (tape zero + PICK_OFFSET_MM)"));
+  Serial1.println(F("  GOMM <mm>       move to tape zero + PICK_OFFSET_MM + mm (absolute)"));
+  Serial1.println(F("  MOVEMM <mm>     move by mm relative to current position - only needed"));
+  Serial1.println(F("                  routinely to (re-)measure PICK_OFFSET_MM itself with a"));
+  Serial1.println(F("                  camera on a reference unit, not per-reel anymore"));
   Serial1.println(F("  FEED            advance by the configured PITCH (next pocket)"));
   Serial1.println(F("  --- low-level bus commands, for reference (see project.md) ---"));
   Serial1.println(F("  FEEDCFG <zeroRaw 0-4095> <halfTeeth 1-255>  set both fields directly,"));
