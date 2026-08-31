@@ -20,9 +20,16 @@ DRV8833 + AS5600 closed-loop wheel-position logic, but two changes:
    sharing the bus UART.
 
 The frame format implemented in `src/main.cpp` (`FRAME_START`/`CMD_PING`/
-`CMD_SET_ADDR`/CRC8) is **explicitly a placeholder**, not Modbus. It exists
+`CMD_DISCOVER`/CRC8) is **explicitly a placeholder**, not Modbus. It exists
 to validate RE/DE switching timing, addressing, and byte-level transport
 on real silicon before committing to a real protocol — see below.
+
+**Revision note:** the addressing scheme below is v2, replacing the
+EEPROM-persistent-address + dedicated-programming-bus design from the
+first version of this document. The dedicated programming bus was
+dropped from the project (feeders now program over the same shared rail
+they run on), which broke the collision-free assumption that design
+relied on — see "Addressing scheme" for the replacement.
 
 ---
 
@@ -78,74 +85,108 @@ resource limit, just an ordering dependency.
 
 ---
 
-## Addressing scheme
+## Addressing scheme (v2 — no dedicated programming bus)
 
-The core tension raised: a feeder's live bus address needs to be small
-(Modbus RTU unicast addresses are 1 byte, 1–247) and must stay unique
-among whatever's currently on the rail, while the number of distinct
-**component/part types** a feeder might carry over its lifetime could run
-into the hundreds. Those are two different numbers and don't need to
-share an address space:
+The project dropped the dedicated one-at-a-time programming bus — feeders
+now program over the same shared rail they run on. That removed the
+physical guarantee the first version of this scheme leaned on (only one
+unassigned feeder ever electrically present at a time), so addressing had
+to be redesigned around three separated concerns instead of one:
 
-- **Bus address** (this firmware's `feederAddress`, `uint8_t`, 1–247):
-  identifies *which physical feeder* is talking on the bus right now.
-  With up to ~64 feeders per system (two banks × 32, per the README), 247
-  slots is ample headroom.
-- **Component/part ID**: just data, stored in a register (or several) on
-  the feeder — a 16- or 32-bit value with effectively no size pressure
-  from the addressing scheme at all. It never needs to be, and shouldn't
-  be, encoded into the bus address.
+1. **Bus address** — low-level, RS485-only, exists so the host can talk to
+   one feeder without others answering.
+2. **Component/part ID** — which OpenPnP part (`openPnP/parts.xml` `id`,
+   currently small integers, comfortably fits a `uint16_t`) is loaded
+   right now.
+3. **Feed calibration** — where "ready" is on the currently-loaded tape,
+   and how far to advance per pick. Only meaningful for the *current*
+   component, not the feeder in the abstract.
 
-### Persistent address, not renegotiated per session
+Conflating any of these (e.g. routing part identity through the bus
+address, as OrionProtocol's assign-to-`0x0000` flow effectively does) is
+what made 247 addresses feel scarce. Kept separate, none of them are:
 
-`feederAddress` is loaded from EEPROM at boot (`loadAddressFromEeprom()`).
-If EEPROM holds a value in 1–247, that becomes the live address
-immediately — no re-registration needed. This directly satisfies "insert
-a feeder addressed a week ago and it just works": as long as the host
-never hands that same number to a *different* feeder while the first one
-might still come back, there's no collision. That's a host-side bookkeeping
-rule (addresses are sticky per feeder, freed only by an explicit host
-action), not something firmware enforces — firmware's job is just to keep
-using the same number forever once it has one.
+### Bus address: disposable, RAM-only, re-earned every boot
 
-### The "unassigned" problem
+`busAddress` starts at `ADDR_UNASSIGNED` (0x00) on every boot — nothing
+about it is read from or written to EEPROM. A feeder gets a real address
+by discovery:
 
-A factory-fresh feeder (EEPROM never written, reads back the erased-flash
-sentinel `0xFF`) can't safely guess a bus address — plugging into the
-shared rail without one would either collide or need bus-wide arbitration
-logic. `alpha01` resolves this the same way the project's own physical
-design already does, rather than inventing new bus arbitration:
+1. Host broadcasts `CMD_DISCOVER` (addr 0x00).
+2. Every still-unassigned feeder waits a random jitter delay
+   (`DISCOVERY_JITTER_MAX_MS`, up to 200ms) before replying with
+   `CMD_DISCOVER_HERE`, carrying a random per-boot `sessionNonce` *and*
+   its persisted `componentId` — so the host immediately learns what's
+   loaded without a separate round-trip, when that's already known.
+   Jitter is why this doesn't need collision-free bus arbitration
+   hardware (RS485 can't do CAN/1-Wire-style bitwise arbitration): if two
+   unassigned feeders' replies collide, the host just sees a bad CRC and
+   re-polls; each round's jitter is independently random, so given a few
+   rounds every feeder eventually gets a clear slot.
+3. Host picks a free small address and broadcasts `CMD_ASSIGN_ADDR` with
+   `[nonceHi, nonceLo, newAddr]`. Only the feeder whose `sessionNonce`
+   matches adopts `newAddr` — everyone else ignores it, so this is safe
+   to broadcast even while other feeders are mid-discovery.
+4. Feeder ACKs under its new unicast address, confirming.
 
-- Firmware maps any invalid/unset EEPROM value to a single reserved
-  **`PARKING_ADDRESS` (0xF8 / 248)** — deliberately outside the valid
-  Modbus unicast range (1–247), so it can never collide with a real
-  assigned address.
-- The project's host design already puts a **dedicated programming bus**
-  (a separate RS485 line, physically one feeder at a time via the
-  programmer slot — see Concept.md and the Feeder Host's 3rd RS485 line)
-  ahead of the shared feeder rail. Because only one feeder is ever
-  electrically present on that line at a time, every never-assigned
-  feeder can safely share the same parking address with zero collision
-  risk — there's structurally only one listener.
-- `CMD_SET_ADDR` (and the `ADDR <n>` debug command, for bench use without
-  a host) only succeeds while `feederAddress == PARKING_ADDRESS` — once a
-  feeder has a permanent address, it refuses to be silently reassigned by
-  further bus traffic. Re-addressing an already-assigned feeder is left
-  as a deliberate, explicit host action to design later, not something
-  that happens implicitly.
+Because this repeats from scratch every boot, **reinserting the same
+feeder gets it a (possibly different) address, and that's fine** — nothing
+durable was ever tied to the number. This is what makes a 1-byte
+(1–247) address workable again despite there being no exclusive
+programming slot: the address is cheap enough to throw away and redo
+every single time.
 
-### Net result
+`SIMADDR <n>` (debug port) force-sets `busAddress` locally without going
+through discovery, for bench-testing motion/config commands with no host
+on the bus yet — not part of the real flow.
 
-- Bus addresses stay small (1–247) and are handed out once, permanently,
-  through the existing one-at-a-time programming slot.
-- Unassigned feeders park on one fixed, out-of-range address with no
-  arbitration needed, because the mechanical design already guarantees
-  only one of them is listening at a time.
-- Component ID cardinality (hundreds+) is irrelevant to addressing — it's
-  just register data on top of an already-unique bus address.
-- A feeder reinserted after any amount of time keeps its address and
-  keeps working, provided the host's registry treats addresses as sticky
-  rather than reassignable pool slots.
+### Component ID + feed calibration: EEPROM, sticky, explicit
+
+Unlike the address, these are exactly what should survive a power cycle —
+`FeederConfig` (`componentId`, `tapeZeroRaw`, `feedHalfTeeth`, `crc`) is
+read from EEPROM at boot (`loadConfig()`) and reset to a fully-unset state
+only if the CRC doesn't check out (factory-fresh board).
+
+The intended host flow after discovery:
+
+- If the `CMD_DISCOVER_HERE` reply's `componentId` is already set (same
+  reel as before power-off/reinsertion) → host already knows what's
+  loaded and can fetch `tapeZeroRaw`/`feedHalfTeeth` via
+  `CMD_GET_COMPONENT` and resume immediately. No operator involvement.
+- If `componentId` is `COMPONENT_ID_UNSET` (fresh feeder, or after a
+  reset) → host prompts "what's loaded here?", writes the answer via
+  `CMD_SET_COMPONENT`, and that kicks off calibration (jog to the first
+  pocket, set `feedHalfTeeth` for this reel's pitch) via
+  `CMD_SET_FEED_CONFIG` before the feeder is usable.
+
+`setComponentId()` deliberately wipes `tapeZeroRaw`/`feedHalfTeeth`
+whenever the *value* changes (not on every call — writing the same id
+back, e.g. confirming "still the same reel" after a replug, leaves
+calibration untouched). A stale zero/step size silently carried over from
+a different component would be worse than forcing a visible recalibration
+prompt. `CMD_RESET_CONFIG` (`RESETCFG` on the debug port) clears just the
+calibration, independent of a component-id change, for redoing a bad
+calibration on the same reel.
+
+`feedHalfTeeth` is **one field**, not three separately-stored presets —
+2 = standard EIA-481 4mm/1-tooth sprocket pitch, 1 = 2mm "fine" pitch,
+anything else = "custom" for wider-pitch reels (8/12/16/24mm...). "Raw/
+fine/custom" are just named values a host UI might offer as shortcuts for
+what to write here, not three parallel storage slots — a loaded reel only
+ever has one active pitch at a time.
+
+**Not yet wired up:** `tapeZeroRaw` and `feedHalfTeeth` are stored and
+settable/gettable over the bus, but the closed-loop mover doesn't use them
+yet — `FEED` (debug command) advances by `feedHalfTeeth` relative to the
+current in-memory `targetAngleDeg`, not anchored to `tapeZeroRaw`. Wiring
+`tapeZeroRaw` in as the actual index-0 reference for feed moves is the
+next increment, not done in this pass.
+
+This is also explicitly separate from `calibrateZero()`/`stillDutyMax`
+elsewhere in this file — that's DRV8833 motor-duty characterization
+(electrical, unrelated to which tape is loaded) and still reruns on every
+boot regardless of component. Two different things named similarly by
+coincidence; don't conflate them.
 
 ---
 
@@ -155,13 +196,22 @@ design already does, rather than inventing new bus arbitration:
   timing budget above says either is affordable; the choice is now a
   tooling/ecosystem one (Modbus gives off-the-shelf host libraries and
   bus analyzers; OrionProtocol is already partly implemented and
-  purpose-fit).
+  purpose-fit). The discovery scheme above isn't Modbus-specific and
+  would need adapting either way (Modbus has no native discovery
+  concept — this'd sit as a pre-step before switching into Modbus
+  framing, or inform a custom protocol directly).
 - Interrupt-driven UART0 RX (ring buffer) — needed before real bus
   traffic coexists with blocking moves; not yet implemented in alpha01.
-- Host-side address registry / reassignment flow — alpha01 implements the
-  feeder side of persistence and refusal-once-assigned; the host's
-  bookkeeping (which addresses are in use, how a feeder gets deliberately
-  re-parked/erased) isn't designed yet.
+  Also now needed for `handleFrame()`'s `delay(random(...))` jitter
+  during discovery, which blocks byte processing for up to 200ms — fine
+  with polling today since nothing else needs the CPU then, but worth
+  revisiting once RX is interrupt-driven.
+- Wiring `tapeZeroRaw`/`feedHalfTeeth` into actual feed-move targeting
+  (see above) — currently just stored/exposed, not used by motion.
+- Discovery round timing/retry policy (how often the host re-polls, how
+  many rounds before giving up on a round with a collision) isn't
+  designed — alpha01 implements the feeder side of one exchange, not a
+  host-side discovery loop.
 - RS485 turnaround timing (`rs485Write()`'s `Serial.flush()` then
   immediate RE-low) hasn't been scoped on a bus analyzer yet — worth
   checking against the MAX1487's datasheet turnaround spec once hardware

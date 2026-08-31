@@ -89,33 +89,123 @@ const int   CAL_MARGIN_DUTY = 6;
 const unsigned long CAL_RESTORE_TIMEOUT_MS = 4000;
 
 // ---------------------------
-// Addressing (see project.md "Addressing scheme")
+// Addressing (see project.md "Addressing scheme", v2)
+//
+// The bus address is disposable and RAM-only: every boot starts
+// unaddressed (0x00) and re-earns an address via CMD_DISCOVER, so nothing
+// about the address survives a power cycle or needs EEPROM at all. What
+// DOES persist is the feeder's loaded-component config (below) - that's
+// the thing worth not losing on reinsertion, not the address.
 // ---------------------------
-constexpr int EEPROM_ADDR_LOCATION = 0;
-constexpr uint8_t ADDR_UNSET = 0xFF;     // erased-EEPROM sentinel, never a valid address
-constexpr uint8_t PARKING_ADDRESS = 0xF8; // 248 - outside 1-247, used only pre-assignment
+constexpr uint8_t ADDR_UNASSIGNED = 0x00; // also the broadcast address
 constexpr uint8_t ADDR_MIN = 1;
 constexpr uint8_t ADDR_MAX = 247;
 
-uint8_t feederAddress = PARKING_ADDRESS;
+uint8_t busAddress = ADDR_UNASSIGNED;
+uint16_t sessionNonce = 0; // random per boot, only used to disambiguate discovery replies
 
 bool isValidAssignedAddress(uint8_t a) {
   return a >= ADDR_MIN && a <= ADDR_MAX;
 }
 
-void loadAddressFromEeprom() {
-  const uint8_t stored = EEPROM.read(EEPROM_ADDR_LOCATION);
-  feederAddress = isValidAssignedAddress(stored) ? stored : PARKING_ADDRESS;
+// Seeds from whatever entropy an unloaded AVR has handy: a floating ADC
+// pin plus boot-to-boot jitter in micros(). Not cryptographically unique -
+// doesn't need to be. It only has to avoid colliding with whichever other
+// feeders happen to be replying to the same CMD_DISCOVER round, and a
+// fresh value is drawn every boot anyway.
+void seedSessionNonce() {
+  randomSeed(analogRead(A2) ^ micros());
+  sessionNonce = (uint16_t)random(0, 65536);
 }
 
-// Only meaningful while this feeder is alone on a programming bus (see
-// project.md) - nothing here enforces that; it's a physical/topological
-// guarantee from the host side, not something firmware can verify.
-bool assignAddress(uint8_t newAddr) {
-  if (!isValidAssignedAddress(newAddr)) return false;
-  EEPROM.update(EEPROM_ADDR_LOCATION, newAddr);
-  feederAddress = newAddr;
-  return true;
+// ---------------------------
+// Persistent per-feeder config (EEPROM) - what SHOULD survive reinsertion.
+//
+// componentId: OpenPnP part id (see openPnP/parts.xml) currently loaded.
+// tapeZeroRaw: AS5600 raw angle (0-4095) marking the current tape's
+//   "ready" pocket position - meaningless across a component change, since
+//   a different reel is now engaged with the sprocket at an arbitrary
+//   rotational offset.
+// feedHalfTeeth: advance per pick, in half-tooth (4.5 deg / 2mm) units.
+//   2 = 4mm/1 tooth (standard EIA-481 sprocket pitch, "raw"), 1 = 2mm
+//   ("fine", sub-tooth pitch), anything else = "custom" for wider-pitch
+//   parts (8/12/16/24mm reels etc). Not three separate stored presets -
+//   just one active step size; changing which preset is "active" is a
+//   host/UI choice about what value to write here.
+//
+// All three reset to "unset" together whenever componentId changes (a
+// different reel means the old zero/step are meaningless), or on an
+// explicit manual reset - never on a bare reinsertion of the same
+// component. NOT to be confused with calibrateZero()/stillDutyMax below,
+// which is the DRV8833 motor-duty characterization - electrical, unrelated
+// to which tape is loaded, and still re-run on every boot regardless.
+// ---------------------------
+struct FeederConfig {
+  uint16_t componentId;
+  uint16_t tapeZeroRaw;
+  uint8_t feedHalfTeeth;
+  uint8_t crc;
+};
+
+constexpr int EEPROM_CONFIG_LOCATION = 0;
+constexpr uint16_t COMPONENT_ID_UNSET = 0xFFFF;
+constexpr uint16_t TAPE_ZERO_UNSET = 0xFFFF;
+constexpr uint8_t FEED_HALF_TEETH_UNSET = 0xFF;
+constexpr uint8_t FEED_HALF_TEETH_STANDARD = 2; // 4mm / 1 tooth, EIA-481 default
+
+FeederConfig cfg;
+
+uint8_t crc8(const uint8_t *data, uint8_t len); // fwd decl, defined below
+
+uint8_t configCrc(const FeederConfig &c) {
+  return crc8(reinterpret_cast<const uint8_t *>(&c), sizeof(FeederConfig) - 1);
+}
+
+void resetFeedConfig() {
+  cfg.tapeZeroRaw = TAPE_ZERO_UNSET;
+  cfg.feedHalfTeeth = FEED_HALF_TEETH_UNSET;
+}
+
+void saveConfig() {
+  cfg.crc = configCrc(cfg);
+  EEPROM.put(EEPROM_CONFIG_LOCATION, cfg); // EEPROM.put only rewrites changed bytes
+}
+
+void loadConfig() {
+  EEPROM.get(EEPROM_CONFIG_LOCATION, cfg);
+  if (cfg.crc != configCrc(cfg)) {
+    // Blank/garbage EEPROM (factory-fresh board) - start fully unset.
+    cfg.componentId = COMPONENT_ID_UNSET;
+    resetFeedConfig();
+    saveConfig();
+  }
+}
+
+// Host is expected to call this whenever it learns/decides what's loaded.
+// Resetting the feed config here (rather than leaving stale values from
+// whatever was loaded before) is deliberate: a stale tapeZero/feedHalfTeeth
+// silently applied to the wrong component is worse than forcing a visible
+// recalibration prompt.
+void setComponentId(uint16_t newId) {
+  if (newId != cfg.componentId) {
+    cfg.componentId = newId;
+    resetFeedConfig();
+  }
+  saveConfig();
+}
+
+void setFeedConfig(uint16_t tapeZeroRaw, uint8_t feedHalfTeeth) {
+  cfg.tapeZeroRaw = tapeZeroRaw;
+  cfg.feedHalfTeeth = feedHalfTeeth;
+  saveConfig();
+}
+
+// Explicit manual reset (debug command / dedicated bus command) - clears
+// feed config without requiring a component-id round-trip, e.g. to redo a
+// bad calibration on the same reel.
+void manualResetFeedConfig() {
+  resetFeedConfig();
+  saveConfig();
 }
 
 // ---------------------------
@@ -147,11 +237,29 @@ uint8_t crc8(const uint8_t *data, uint8_t len) {
 
 // Placeholder frame, NOT Modbus:
 //   [0xAA][ADDR][CMD][LEN][PAYLOAD...][CRC8 over ADDR..PAYLOAD]
-// ADDR: 0x00 broadcast, 1-247 unicast, PARKING_ADDRESS = only-unassigned
+// ADDR: 0x00 = broadcast (also "still unassigned"), 1-247 = unicast.
 constexpr uint8_t FRAME_START = 0xAA;
-constexpr uint8_t CMD_PING = 0x01;      // payload: none -> reply CMD_PONG with feederAddress
+
+constexpr uint8_t CMD_PING = 0x01;         // -> CMD_PONG
 constexpr uint8_t CMD_PONG = 0x81;
-constexpr uint8_t CMD_SET_ADDR = 0x02;  // payload: [newAddr] -> reply CMD_ACK/CMD_NACK
+
+// Discovery (see project.md "Addressing scheme, v2"): only a feeder with
+// busAddress==ADDR_UNASSIGNED reacts to CMD_DISCOVER. It waits a random
+// jitter delay (so simultaneously-unassigned feeders don't all reply at
+// once) then announces itself with its session nonce plus whatever
+// component it already remembers being loaded with (host can skip
+// re-asking "what do you carry" if this is a known/persisted value).
+constexpr uint8_t CMD_DISCOVER = 0x10;      // broadcast, no payload
+constexpr uint8_t CMD_DISCOVER_HERE = 0x90; // payload: [nonceHi,nonceLo,componentIdHi,componentIdLo]
+constexpr uint8_t CMD_ASSIGN_ADDR = 0x11;   // broadcast, payload: [nonceHi,nonceLo,newAddr]
+                                             // only the matching nonce adopts newAddr
+
+constexpr uint8_t CMD_GET_COMPONENT = 0x20; // -> CMD_COMPONENT_INFO
+constexpr uint8_t CMD_COMPONENT_INFO = 0xA0; // payload: [idHi,idLo,zeroHi,zeroLo,feedHalfTeeth]
+constexpr uint8_t CMD_SET_COMPONENT = 0x21;  // payload: [idHi,idLo] -> CMD_ACK
+constexpr uint8_t CMD_SET_FEED_CONFIG = 0x22; // payload: [zeroHi,zeroLo,feedHalfTeeth] -> CMD_ACK
+constexpr uint8_t CMD_RESET_CONFIG = 0x23;    // no payload -> CMD_ACK
+
 constexpr uint8_t CMD_ACK = 0x82;
 constexpr uint8_t CMD_NACK = 0x83;
 
@@ -165,7 +273,7 @@ void sendFrame(uint8_t cmd, const uint8_t *payload, uint8_t payloadLen) {
   uint8_t buf[8 + 16];
   uint8_t n = 0;
   buf[n++] = FRAME_START;
-  buf[n++] = feederAddress; // frames from a feeder are always tagged with its own address
+  buf[n++] = busAddress; // frames from a feeder are tagged with its own address (0 while unassigned)
   buf[n++] = cmd;
   buf[n++] = payloadLen;
   for (uint8_t i = 0; i < payloadLen; i++) buf[n++] = payload[i];
@@ -174,31 +282,72 @@ void sendFrame(uint8_t cmd, const uint8_t *payload, uint8_t payloadLen) {
   rs485Write(buf, n);
 }
 
+// Random delay before replying to CMD_DISCOVER, so multiple feeders that
+// are all still unassigned don't reply in lockstep. Blocking is fine here:
+// nothing else needs the CPU while a still-unaddressed feeder waits its
+// turn to announce itself.
+constexpr unsigned long DISCOVERY_JITTER_MAX_MS = 200;
+
 void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len) {
-  // Only react to broadcast, our own assigned address, or (while unassigned)
-  // the shared parking address.
-  const bool forUs = (addr == 0x00) || (addr == feederAddress) ||
-                      (feederAddress == PARKING_ADDRESS && addr == PARKING_ADDRESS);
-  if (!forUs) return;
+  // CMD_DISCOVER/CMD_ASSIGN_ADDR are broadcast-only and only matter to a
+  // still-unassigned feeder - handled before the normal address filter
+  // below, since an unassigned feeder has no unicast address to match.
+  if (addr == ADDR_UNASSIGNED && busAddress == ADDR_UNASSIGNED) {
+    if (cmd == CMD_DISCOVER) {
+      delay(random(0, DISCOVERY_JITTER_MAX_MS));
+      uint8_t reply[4] = {
+        (uint8_t)(sessionNonce >> 8), (uint8_t)(sessionNonce & 0xFF),
+        (uint8_t)(cfg.componentId >> 8), (uint8_t)(cfg.componentId & 0xFF)
+      };
+      sendFrame(CMD_DISCOVER_HERE, reply, sizeof(reply));
+      return;
+    }
+    if (cmd == CMD_ASSIGN_ADDR) {
+      if (len < 3) return;
+      const uint16_t targetNonce = ((uint16_t)payload[0] << 8) | payload[1];
+      if (targetNonce != sessionNonce) return; // not us
+      if (!isValidAssignedAddress(payload[2])) return;
+      busAddress = payload[2];
+      sendFrame(CMD_ACK, &payload[2], 1); // now sent under the new unicast address
+      return;
+    }
+  }
+
+  // Everything else requires a real unicast address - broadcast or our own.
+  const bool forUs = (addr == 0x00) || (addr == busAddress);
+  if (!forUs || busAddress == ADDR_UNASSIGNED) return;
 
   switch (cmd) {
     case CMD_PING: {
       sendFrame(CMD_PONG, nullptr, 0);
       break;
     }
-    case CMD_SET_ADDR: {
-      if (feederAddress != PARKING_ADDRESS) {
-        // Already has a permanent address - refuse to be silently
-        // reassigned by rail traffic. Re-addressing an already-assigned
-        // feeder should be a deliberate host action, not implemented here.
-        sendFrame(CMD_NACK, nullptr, 0);
-        break;
-      }
-      if (len < 1 || !assignAddress(payload[0])) {
-        sendFrame(CMD_NACK, nullptr, 0);
-        break;
-      }
-      sendFrame(CMD_ACK, &payload[0], 1);
+    case CMD_GET_COMPONENT: {
+      uint8_t reply[5] = {
+        (uint8_t)(cfg.componentId >> 8), (uint8_t)(cfg.componentId & 0xFF),
+        (uint8_t)(cfg.tapeZeroRaw >> 8), (uint8_t)(cfg.tapeZeroRaw & 0xFF),
+        cfg.feedHalfTeeth
+      };
+      sendFrame(CMD_COMPONENT_INFO, reply, sizeof(reply));
+      break;
+    }
+    case CMD_SET_COMPONENT: {
+      if (len < 2) { sendFrame(CMD_NACK, nullptr, 0); break; }
+      const uint16_t newId = ((uint16_t)payload[0] << 8) | payload[1];
+      setComponentId(newId);
+      sendFrame(CMD_ACK, payload, 2);
+      break;
+    }
+    case CMD_SET_FEED_CONFIG: {
+      if (len < 3) { sendFrame(CMD_NACK, nullptr, 0); break; }
+      const uint16_t zero = ((uint16_t)payload[0] << 8) | payload[1];
+      setFeedConfig(zero, payload[2]);
+      sendFrame(CMD_ACK, payload, 3);
+      break;
+    }
+    case CMD_RESET_CONFIG: {
+      manualResetFeedConfig();
+      sendFrame(CMD_ACK, nullptr, 0);
       break;
     }
     default:
@@ -530,12 +679,18 @@ void calibrateZero() {
 }
 
 // ---------------------------
-// Debug port (Serial1): status/help + local address assignment for bench use
+// Debug port (Serial1): status/help + local component config for bench use
 // ---------------------------
 void printStatus() {
   Serial1.print(F("addr="));
-  if (feederAddress == PARKING_ADDRESS) Serial1.print(F("PARKING"));
-  else Serial1.print(feederAddress);
+  if (busAddress == ADDR_UNASSIGNED) Serial1.print(F("UNASSIGNED"));
+  else Serial1.print(busAddress);
+  Serial1.print(F(" component="));
+  if (cfg.componentId == COMPONENT_ID_UNSET) Serial1.print(F("UNSET"));
+  else Serial1.print(cfg.componentId);
+  Serial1.print(F(" feedHalfTeeth="));
+  if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) Serial1.print(F("UNSET"));
+  else Serial1.print(cfg.feedHalfTeeth);
   Serial1.print(F(" angle="));
   Serial1.print(readAngleDeg(), 2);
   Serial1.print(F(" target="));
@@ -550,9 +705,15 @@ void printHelp() {
   Serial1.println(F("Debug port commands (newline terminated):"));
   Serial1.println(F("  A<deg> / T<index> / STEP+1 / STEP-1 / STEP+0.5 / STEP-0.5"));
   Serial1.println(F("  ZERO / STOP / STATUS / TRACE ON / TRACE OFF / HELP"));
-  Serial1.println(F("  WHOAMI       print current bus address"));
-  Serial1.println(F("  ADDR <n>     assign bus address n (1-247), persisted to EEPROM"));
-  Serial1.println(F("                only while addr==PARKING (mirrors CMD_SET_ADDR over RS485)"));
+  Serial1.println(F("  WHOAMI          print bus address + loaded component config"));
+  Serial1.println(F("  SIMADDR <n>     force bus address n locally (1-247), bench-only,"));
+  Serial1.println(F("                  bypasses CMD_DISCOVER/CMD_ASSIGN_ADDR - for testing"));
+  Serial1.println(F("                  motion/config commands without a host on the bus yet"));
+  Serial1.println(F("  COMPONENT <id>  set loaded component id (mirrors CMD_SET_COMPONENT);"));
+  Serial1.println(F("                  resets feed config if id actually changed"));
+  Serial1.println(F("  FEEDCFG <zeroRaw> <halfTeeth>   set tape zero + step size, persisted"));
+  Serial1.println(F("  RESETCFG        clear tape zero + step size only (keeps component id)"));
+  Serial1.println(F("  FEED            advance by the configured feedHalfTeeth (next pocket)"));
 }
 
 void handleDebugLine(String line) {
@@ -566,19 +727,48 @@ void handleDebugLine(String line) {
   if (upper == "HELP" || upper == "?") { printHelp(); return; }
   if (upper == "TRACE ON") { traceMoveEnabled = true; return; }
   if (upper == "TRACE OFF") { traceMoveEnabled = false; return; }
-  if (upper == "WHOAMI") {
-    Serial1.print(F("address="));
-    Serial1.println(feederAddress == PARKING_ADDRESS ? F("PARKING") : String(feederAddress));
-    return;
-  }
-  if (upper.startsWith("ADDR ")) {
-    const int n = upper.substring(5).toInt();
-    if (feederAddress != PARKING_ADDRESS) {
-      Serial1.println(F("Refused: already has a permanent address, use a host reassignment flow."));
-    } else if (n < ADDR_MIN || n > ADDR_MAX || !assignAddress((uint8_t)n)) {
+  if (upper == "WHOAMI") { printStatus(); return; }
+  if (upper.startsWith("SIMADDR ")) {
+    const int n = upper.substring(8).toInt();
+    if (n < ADDR_MIN || n > ADDR_MAX) {
       Serial1.println(F("Refused: address must be 1-247."));
     } else {
-      Serial1.print(F("Address assigned: ")); Serial1.println(n);
+      busAddress = (uint8_t)n;
+      Serial1.print(F("Bench-only address forced: ")); Serial1.println(n);
+    }
+    return;
+  }
+  if (upper.startsWith("COMPONENT ")) {
+    const long id = upper.substring(10).toInt();
+    if (id < 0 || id > 65534) {
+      Serial1.println(F("Refused: component id must be 0-65534."));
+    } else {
+      setComponentId((uint16_t)id);
+      Serial1.print(F("Component set: ")); Serial1.println(id);
+    }
+    return;
+  }
+  if (upper.startsWith("FEEDCFG ")) {
+    const String rest = upper.substring(8);
+    const int sep = rest.indexOf(' ');
+    if (sep < 0) { Serial1.println(F("Usage: FEEDCFG <zeroRaw 0-4095> <halfTeeth 1-255>")); return; }
+    const long zero = rest.substring(0, sep).toInt();
+    const long half = rest.substring(sep + 1).toInt();
+    if (zero < 0 || zero > 4095 || half < 1 || half > 255) {
+      Serial1.println(F("Refused: zeroRaw 0-4095, halfTeeth 1-255."));
+    } else {
+      setFeedConfig((uint16_t)zero, (uint8_t)half);
+      Serial1.println(F("Feed config saved."));
+    }
+    return;
+  }
+  if (upper == "RESETCFG") { manualResetFeedConfig(); Serial1.println(F("Feed config reset.")); return; }
+  if (upper == "FEED") {
+    if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) {
+      Serial1.println(F("Refused: feedHalfTeeth not configured, run FEEDCFG first."));
+    } else {
+      targetAngleDeg = normalizeDeg(targetAngleDeg + cfg.feedHalfTeeth * (DEG_PER_TOOTH / 2.0f));
+      commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
     }
     return;
   }
@@ -624,7 +814,8 @@ void setup() {
   Serial1.begin(DEBUG_BAUD);
   rs485Init();
 
-  loadAddressFromEeprom();
+  seedSessionNonce();
+  loadConfig(); // busAddress always starts ADDR_UNASSIGNED - re-earned via CMD_DISCOVER each boot
 
   Serial1.println(F("alpha01 feeder firmware ready"));
   printStatus();
