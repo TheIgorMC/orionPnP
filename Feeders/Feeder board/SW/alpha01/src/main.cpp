@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <EEPROM.h>
 #include <math.h>
+#include <Adafruit_NeoPixel.h>
 #include "pins_config.h"
 
 /*
@@ -80,6 +81,14 @@ const int   DEFAULT_MIN_MOVE_DUTY = 60;
 const unsigned long MOVE_TIMEOUT_MS = 6000;
 const unsigned long STALL_TIMEOUT_MS = 800;
 const float STALL_MOVE_THRESHOLD_DEG = 0.15f;
+
+// Alpha hardware bring-up: both buttons jog their motor open-loop, no
+// AS5600 magnet required - moveToAngle() needs magnetDetected() to be true
+// or it aborts immediately, which doesn't hold on bare test hardware with
+// no magnet mounted yet. Not a real feature; SW1 should go back to
+// commandMoveTo() (closed-loop, tooth-stepped) once a magnet is in place.
+const int   JOG_DUTY = FAST_DUTY;
+const unsigned long JOG_DURATION_MS = 300;
 
 const bool BUTTONS_ACTIVE_LOW = true;
 const unsigned long DEBOUNCE_MS = 20;
@@ -232,6 +241,7 @@ void manualResetFeedConfig() {
 void setTapeZeroHere();
 void setFeedPitchMm(float mm);
 bool feedOnePitch(unsigned long timeoutMs);
+void setExtLed(bool on);
 
 // ---------------------------
 // RS485 transport (USART0 + RE/DE on PIN_RS485_RE)
@@ -287,6 +297,7 @@ constexpr uint8_t CMD_RESET_CONFIG = 0x23;    // no payload -> CMD_ACK
 constexpr uint8_t CMD_ZERO_HERE = 0x24;       // no payload: capture current position as tape zero -> CMD_ACK
 constexpr uint8_t CMD_SET_PITCH_MM = 0x25;    // payload: [mm] (1 byte, whole mm) -> CMD_ACK
 constexpr uint8_t CMD_FEED_NEXT = 0x26;       // no payload: advance by configured pitch -> CMD_ACK/CMD_NACK
+constexpr uint8_t CMD_SET_EXT_LED = 0x27;     // payload: [state] (0=off, nonzero=on) -> CMD_ACK/CMD_NACK
 
 constexpr uint8_t CMD_ACK = 0x82;
 constexpr uint8_t CMD_NACK = 0x83;
@@ -393,6 +404,12 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
       if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) { sendFrame(CMD_NACK, nullptr, 0); break; }
       const bool ok = feedOnePitch(MOVE_TIMEOUT_MS);
       sendFrame(ok ? CMD_ACK : CMD_NACK, nullptr, 0);
+      break;
+    }
+    case CMD_SET_EXT_LED: {
+      if (len < 1) { sendFrame(CMD_NACK, nullptr, 0); break; }
+      setExtLed(payload[0] != 0);
+      sendFrame(CMD_ACK, payload, 1);
       break;
     }
     default:
@@ -594,6 +611,61 @@ void lockMotorBOff() {
   pinMode(PIN_BIN2, OUTPUT);
   digitalWrite(PIN_BIN1, HIGH);
   digitalWrite(PIN_BIN2, HIGH);
+}
+
+void brakeMotorB() {
+  digitalWrite(PIN_BIN1, HIGH);
+  digitalWrite(PIN_BIN2, HIGH);
+}
+
+void driveMotorB(int duty, bool forward) {
+  duty = constrain(duty, 0, 255);
+  if (forward) {
+    analogWrite(PIN_BIN1, duty);
+    digitalWrite(PIN_BIN2, LOW);
+  } else {
+    digitalWrite(PIN_BIN1, LOW);
+    analogWrite(PIN_BIN2, duty);
+  }
+}
+
+// ---------------------------
+// External LED (PIN_EXT_LED, PB5/D13) - simple on/off indicator, no PWM.
+// ---------------------------
+void setExtLed(bool on) {
+  digitalWrite(PIN_EXT_LED, on ? HIGH : LOW);
+}
+
+// ---------------------------
+// Onboard status RGB (SK6812, PIN_RGB_DATA/PD3) - single pixel.
+//
+// For now, keep the LED to a simple startup sequence and then off. This is
+// easier to use for board bring-up/debugging than the old hue-cycle animation.
+// ---------------------------
+// KHZ800, not KHZ400: the SK6812SIDE-A-RVS datasheet (T0H max 0.40us, T1H
+// 0.65-1.00us, period >=1.20us) matches standard 800kHz WS2812-family
+// timing. KHZ400's wider "0" pulse (~0.5us) exceeds this part's T0H max and
+// risks being latched as a 1 - that's what was producing solid white.
+// Requires the CKDIV8 fuse to be cleared (real 8MHz) - see fuses target.
+Adafruit_NeoPixel statusLed(1, PIN_RGB_DATA, NEO_GRB + NEO_KHZ800);
+
+const uint8_t RGB_MAX_BRIGHTNESS = 128; // 0-255, halved for now to reduce current
+
+void setStatusLedColor(uint8_t r, uint8_t g, uint8_t b) {
+  statusLed.setPixelColor(0, statusLed.Color(r, g, b));
+  statusLed.show();
+}
+
+void showStartupLedSequence() {
+  statusLed.setBrightness(RGB_MAX_BRIGHTNESS);
+  setStatusLedColor(255, 0, 0);
+  delay(250);
+  setStatusLedColor(0, 255, 0);
+  delay(250);
+  setStatusLedColor(0, 0, 255);
+  delay(250);
+  statusLed.clear();
+  statusLed.show();
 }
 
 bool buttonPressed(int pin, unsigned long &lastEdgeMs) {
@@ -854,6 +926,7 @@ void printHelp() {
   Serial1.println(F("Debug port commands (newline terminated):"));
   Serial1.println(F("  A<deg> / T<index> / STEP+1 / STEP-1 / STEP+0.5 / STEP-0.5"));
   Serial1.println(F("  ZERO / STOP / STATUS / TRACE ON / TRACE OFF / HELP"));
+  Serial1.println(F("  LED ON / LED OFF  external LED (PB5/D13) on/off"));
   Serial1.println(F("  WHOAMI          print bus address + loaded component config"));
   Serial1.println(F("  SIMADDR <n>     force bus address n locally (1-247), bench-only,"));
   Serial1.println(F("                  bypasses CMD_DISCOVER/CMD_ASSIGN_ADDR - for testing"));
@@ -889,6 +962,8 @@ void handleDebugLine(String line) {
   if (upper == "STATUS") { printStatus(); return; }
   if (upper == "ZERO") { calibrateZero(); return; }
   if (upper == "STOP") { brakeMotorA(); Serial1.println(F("Stopped.")); return; }
+  if (upper == "LED ON") { setExtLed(true); Serial1.println(F("External LED ON.")); return; }
+  if (upper == "LED OFF") { setExtLed(false); Serial1.println(F("External LED OFF.")); return; }
   if (upper == "HELP" || upper == "?") { printHelp(); return; }
   if (upper == "TRACE ON") { traceMoveEnabled = true; return; }
   if (upper == "TRACE OFF") { traceMoveEnabled = false; return; }
@@ -999,6 +1074,14 @@ void setup() {
   pinMode(PIN_nSLEEP, OUTPUT);
   pinMode(PIN_nFAULT, INPUT_PULLUP);
   pinMode(PIN_FAULT_LED, OUTPUT);
+  pinMode(PIN_EXT_LED, OUTPUT);
+  pinMode(PIN_RGB_DATA, OUTPUT);
+  setExtLed(false);
+
+  statusLed.begin();
+  statusLed.clear();
+  statusLed.show();
+  showStartupLedSequence();
 
   brakeMotorA();
   lockMotorBOff();
@@ -1029,6 +1112,14 @@ void setup() {
 void loop() {
   const unsigned long now = millis();
 
+  // Alpha hardware bring-up: RGB shows AS5600 magnet-detect status instead
+  // of staying off - green = magnet seen, red = not. Not a real feature.
+  if (magnetDetected()) {
+    setStatusLedColor(0, 255, 0);
+  } else {
+    setStatusLedColor(255, 0, 0);
+  }
+
   if (now - lastHeartbeatMs >= 3000) {
     lastHeartbeatMs = now;
     const float angleNow = readAngleDeg();
@@ -1051,12 +1142,16 @@ void loop() {
   digitalWrite(PIN_FAULT_LED, LOW);
 
   if (buttonPressed(PIN_SW1, lastSw1EdgeMs)) {
-    targetAngleDeg = normalizeDeg(targetAngleDeg + DEG_PER_TOOTH);
-    commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
+    Serial1.println(F("SW1: jogging motor A (open-loop)"));
+    driveMotorA(JOG_DUTY, true);
+    delay(JOG_DURATION_MS);
+    brakeMotorA();
   }
   if (buttonPressed(PIN_SW2, lastSw2EdgeMs)) {
-    targetAngleDeg = normalizeDeg(targetAngleDeg - DEG_PER_TOOTH);
-    commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
+    Serial1.println(F("SW2: jogging motor B (open-loop)"));
+    driveMotorB(JOG_DUTY, true);
+    delay(JOG_DURATION_MS);
+    brakeMotorB();
   }
 
   rs485Poll();
