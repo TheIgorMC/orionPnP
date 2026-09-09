@@ -225,6 +225,66 @@ void loadConfig() {
   }
 }
 
+// ---------------------------
+// Hardware identity (EEPROM) - fixed at manufacturing/assembly time, NOT
+// per-component data. Deliberately a separate struct/EEPROM slot from
+// FeederConfig above: tape width is a property of this physical feeder's
+// mechanical build (its tape guide/rail width), identical for every reel
+// ever loaded into it, so it must never be touched by setComponentId()'s
+// reset-on-change or by RESETCFG/CMD_RESET_CONFIG - those are scoped to
+// "what's currently loaded," not "what this unit physically is."
+//
+// Tape width doesn't feed into any of this firmware's own math - sprocket
+// hole pitch is a fixed 4mm regardless of tape width (EIA-481). Its value
+// is purely informational: for a host/OpenPnP to validate that a reel
+// someone's about to load is actually compatible with this feeder before
+// trying, and for inventory/fleet management (which feeders can take
+// which reels). Included in the CMD_DISCOVER_HERE reply so a host learns
+// it immediately at discovery time, no separate query needed for the
+// common case.
+// ---------------------------
+struct FeederHardwareInfo {
+  uint8_t tapeWidthMm; // EIA-481 standard widths: 8,12,16,24,32,44,56
+  uint8_t crc;
+};
+
+constexpr int EEPROM_HWINFO_LOCATION = 16; // separate from EEPROM_CONFIG_LOCATION, room to grow both
+constexpr uint8_t TAPE_WIDTH_UNSET = 0xFF;
+
+FeederHardwareInfo hwInfo;
+
+uint8_t hwInfoCrc(const FeederHardwareInfo &h) {
+  return crc8(reinterpret_cast<const uint8_t *>(&h), sizeof(FeederHardwareInfo) - 1);
+}
+
+bool isValidTapeWidthMm(uint8_t mm) {
+  switch (mm) {
+    case 8: case 12: case 16: case 24: case 32: case 44: case 56: return true;
+    default: return false;
+  }
+}
+
+void loadHwInfo() {
+  EEPROM.get(EEPROM_HWINFO_LOCATION, hwInfo);
+  if (hwInfo.crc != hwInfoCrc(hwInfo)) {
+    hwInfo.tapeWidthMm = TAPE_WIDTH_UNSET; // factory-fresh board, not yet set at assembly
+    hwInfo.crc = hwInfoCrc(hwInfo);
+    EEPROM.put(EEPROM_HWINFO_LOCATION, hwInfo);
+  }
+}
+
+// No "reset" function by design - this is meant to be set once at
+// assembly/bench-test time and then left alone for the unit's whole life.
+// Validated against known EIA-481 widths so a typo doesn't silently store
+// a nonsense value that later confuses a host's compatibility check.
+bool setTapeWidthMm(uint8_t mm) {
+  if (!isValidTapeWidthMm(mm)) return false;
+  hwInfo.tapeWidthMm = mm;
+  hwInfo.crc = hwInfoCrc(hwInfo);
+  EEPROM.put(EEPROM_HWINFO_LOCATION, hwInfo);
+  return true;
+}
+
 // Host is expected to call this whenever it learns/decides what's loaded.
 // Resetting the feed config here (rather than leaving stale values from
 // whatever was loaded before) is deliberate: a stale tapeZero/feedHalfTeeth
@@ -257,8 +317,34 @@ void manualResetFeedConfig() {
 // transport, below) can call them without reordering the whole file.
 void setTapeZeroHere();
 void setFeedPitchMm(float mm);
-bool feedOnePitch(unsigned long timeoutMs);
+uint8_t feedOnePitch(unsigned long timeoutMs);
 void setExtLed(bool on);
+void identifyBlink(uint8_t count);
+float readAngleDeg();
+uint8_t readStatus();
+uint16_t angleDegToRaw12(float deg);
+void brakeMotorA();
+void brakeMotorB();
+
+// ---------------------------
+// Move/feed error codes - returned by moveToAngle()/commandMoveTo() and
+// everything built on them (moveByMm, moveToTapeZeroPlusMm, feedOnePitch),
+// and echoed in a bus CMD_NACK payload so a host gets a specific reason
+// instead of a bare failure. ERR_NONE (0) is the only success value -
+// these are NOT booleans, don't treat a nonzero return as "truthy success".
+// lastMoveError mirrors whatever the most recent move returned, so
+// CMD_GET_STATUS can report it even for a move that wasn't itself
+// triggered by the command currently being handled (e.g. a button jog).
+// ---------------------------
+constexpr uint8_t ERR_NONE = 0x00;
+constexpr uint8_t ERR_FAULT = 0x01;        // DRV8833 nFAULT asserted
+constexpr uint8_t ERR_MAGNET_LOST = 0x02;  // AS5600 stopped reporting a detected magnet
+constexpr uint8_t ERR_STALL = 0x03;        // no encoder motion for STALL_TIMEOUT_MS
+constexpr uint8_t ERR_TIMEOUT = 0x04;      // move exceeded its timeout without reaching target
+constexpr uint8_t ERR_BAD_PARAM = 0x05;    // malformed/out-of-range command payload
+constexpr uint8_t ERR_NOT_READY = 0x06;    // e.g. FEED_NEXT requested before pitch/zero calibrated
+
+uint8_t lastMoveError = ERR_NONE;
 
 // ---------------------------
 // RS485 transport (USART0 + RE/DE on PIN_RS485_RE)
@@ -302,7 +388,7 @@ constexpr uint8_t CMD_PONG = 0x81;
 // component it already remembers being loaded with (host can skip
 // re-asking "what do you carry" if this is a known/persisted value).
 constexpr uint8_t CMD_DISCOVER = 0x10;      // broadcast, no payload
-constexpr uint8_t CMD_DISCOVER_HERE = 0x90; // payload: [nonceHi,nonceLo,componentIdHi,componentIdLo]
+constexpr uint8_t CMD_DISCOVER_HERE = 0x90; // payload: [nonceHi,nonceLo,componentIdHi,componentIdLo,tapeWidthMm]
 constexpr uint8_t CMD_ASSIGN_ADDR = 0x11;   // broadcast, payload: [nonceHi,nonceLo,newAddr]
                                              // only the matching nonce adopts newAddr
 
@@ -313,9 +399,22 @@ constexpr uint8_t CMD_SET_FEED_CONFIG = 0x22; // payload: [zeroHi,zeroLo,feedHal
 constexpr uint8_t CMD_RESET_CONFIG = 0x23;    // no payload -> CMD_ACK
 constexpr uint8_t CMD_ZERO_HERE = 0x24;       // no payload: capture current position as tape zero -> CMD_ACK
 constexpr uint8_t CMD_SET_PITCH_MM = 0x25;    // payload: [mm] (1 byte, whole mm) -> CMD_ACK
-constexpr uint8_t CMD_FEED_NEXT = 0x26;       // no payload: advance by configured pitch -> CMD_ACK/CMD_NACK
+constexpr uint8_t CMD_FEED_NEXT = 0x26;       // no payload: advance by configured pitch -> CMD_ACK/[errCode] on CMD_NACK
 constexpr uint8_t CMD_SET_EXT_LED = 0x27;     // payload: [state] (0=off, nonzero=on) -> CMD_ACK/CMD_NACK
 constexpr uint8_t CMD_SET_INVERT_DIR = 0x28;  // payload: [motor(0=A,1=B), state(0/1)] -> CMD_ACK/CMD_NACK
+
+// Hardware identity (tape width) - see FeederHardwareInfo above.
+constexpr uint8_t CMD_GET_HW_INFO = 0x29;   // -> CMD_HW_INFO
+constexpr uint8_t CMD_HW_INFO = 0xA1;       // payload: [tapeWidthMm] (0xFF = unset)
+constexpr uint8_t CMD_SET_HW_INFO = 0x2A;   // payload: [tapeWidthMm] -> CMD_ACK/CMD_NACK - assembly/bench-time only, no reset command by design
+
+// Live telemetry/control for real operation (not just bench transport
+// validation) - added once alpha02 started heading for an actual PnP
+// instead of just the bench.
+constexpr uint8_t CMD_GET_STATUS = 0x30;    // -> CMD_STATUS_INFO
+constexpr uint8_t CMD_STATUS_INFO = 0xA2;   // payload: [angleRawHi,angleRawLo,as5600Status,faultActive,lastMoveErr]
+constexpr uint8_t CMD_STOP = 0x31;          // no payload: immediate brake, both motors -> CMD_ACK
+constexpr uint8_t CMD_IDENTIFY = 0x32;      // payload: [blinkCount] (0 => default) -> CMD_ACK after blinking
 
 constexpr uint8_t CMD_ACK = 0x82;
 constexpr uint8_t CMD_NACK = 0x83;
@@ -352,9 +451,10 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
   if (addr == ADDR_UNASSIGNED && busAddress == ADDR_UNASSIGNED) {
     if (cmd == CMD_DISCOVER) {
       delay(random(0, DISCOVERY_JITTER_MAX_MS));
-      uint8_t reply[4] = {
+      uint8_t reply[5] = {
         (uint8_t)(sessionNonce >> 8), (uint8_t)(sessionNonce & 0xFF),
-        (uint8_t)(cfg.componentId >> 8), (uint8_t)(cfg.componentId & 0xFF)
+        (uint8_t)(cfg.componentId >> 8), (uint8_t)(cfg.componentId & 0xFF),
+        hwInfo.tapeWidthMm
       };
       sendFrame(CMD_DISCOVER_HERE, reply, sizeof(reply));
       return;
@@ -419,9 +519,9 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
       break;
     }
     case CMD_FEED_NEXT: {
-      if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) { sendFrame(CMD_NACK, nullptr, 0); break; }
-      const bool ok = feedOnePitch(MOVE_TIMEOUT_MS);
-      sendFrame(ok ? CMD_ACK : CMD_NACK, nullptr, 0);
+      const uint8_t err = feedOnePitch(MOVE_TIMEOUT_MS);
+      if (err == ERR_NONE) sendFrame(CMD_ACK, nullptr, 0);
+      else sendFrame(CMD_NACK, &err, 1); // payload: [errCode] - see ERR_* constants
       break;
     }
     case CMD_SET_EXT_LED: {
@@ -435,6 +535,37 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
       if (payload[0] == 0) invertMotorA = (payload[1] != 0);
       else invertMotorB = (payload[1] != 0);
       sendFrame(CMD_ACK, payload, 2);
+      break;
+    }
+    case CMD_GET_HW_INFO: {
+      sendFrame(CMD_HW_INFO, &hwInfo.tapeWidthMm, 1);
+      break;
+    }
+    case CMD_SET_HW_INFO: {
+      if (len < 1 || !setTapeWidthMm(payload[0])) { sendFrame(CMD_NACK, nullptr, 0); break; }
+      sendFrame(CMD_ACK, payload, 1);
+      break;
+    }
+    case CMD_GET_STATUS: {
+      const uint16_t angleRaw = angleDegToRaw12(readAngleDeg());
+      const uint8_t reply[5] = {
+        (uint8_t)(angleRaw >> 8), (uint8_t)(angleRaw & 0xFF),
+        readStatus(),
+        (uint8_t)(digitalRead(PIN_nFAULT) == LOW ? 1 : 0),
+        lastMoveError
+      };
+      sendFrame(CMD_STATUS_INFO, reply, sizeof(reply));
+      break;
+    }
+    case CMD_STOP: {
+      brakeMotorA();
+      brakeMotorB();
+      sendFrame(CMD_ACK, nullptr, 0);
+      break;
+    }
+    case CMD_IDENTIFY: {
+      identifyBlink(len >= 1 && payload[0] != 0 ? payload[0] : 3);
+      sendFrame(CMD_ACK, nullptr, 0);
       break;
     }
     default:
@@ -694,6 +825,23 @@ void showStartupLedSequence() {
   statusLed.show();
 }
 
+// CMD_IDENTIFY / debug IDENTIFY: white flashes, distinct from the
+// magnet-detect green/red loop() shows normally - so an operator managing
+// several feeders on a live rail can pick the right physical unit for a
+// given bus address. Blocking (a few hundred ms) is fine: this is a rare,
+// deliberate operator action, not something time-critical happens during.
+// No need to restore the prior LED color afterward - loop() repaints the
+// magnet-status color on its very next iteration anyway.
+void identifyBlink(uint8_t count) {
+  for (uint8_t i = 0; i < count; i++) {
+    setStatusLedColor(255, 255, 255);
+    delay(150);
+    statusLed.clear();
+    statusLed.show();
+    delay(150);
+  }
+}
+
 bool buttonPressed(int pin, unsigned long &lastEdgeMs) {
   const int activeLevel = BUTTONS_ACTIVE_LOW ? LOW : HIGH;
   if (digitalRead(pin) == activeLevel) {
@@ -710,7 +858,7 @@ bool buttonPressed(int pin, unsigned long &lastEdgeMs) {
 // ---------------------------
 // Closed-loop move (unchanged from TestBench04, Serial -> Serial1)
 // ---------------------------
-bool moveToAngle(float target, unsigned long timeoutMs) {
+uint8_t moveToAngle(float target, unsigned long timeoutMs) {
   const unsigned long moveId = ++moveSeq;
   const unsigned long start = millis();
   unsigned long lastMoveMs = millis();
@@ -731,13 +879,15 @@ bool moveToAngle(float target, unsigned long timeoutMs) {
       brakeMotorA();
       Serial1.print(F("[move ")); Serial1.print(moveId);
       Serial1.println(F("] ERROR: DRV8833 fault asserted, move aborted"));
-      return false;
+      lastMoveError = ERR_FAULT;
+      return ERR_FAULT;
     }
     if (!magnetDetected()) {
       brakeMotorA();
       Serial1.print(F("[move ")); Serial1.print(moveId);
       Serial1.println(F("] ERROR: magnet lost during move (MD=0), move aborted"));
-      return false;
+      lastMoveError = ERR_MAGNET_LOST;
+      return ERR_MAGNET_LOST;
     }
 
     const float current = readAngleDeg();
@@ -747,7 +897,8 @@ bool moveToAngle(float target, unsigned long timeoutMs) {
       brakeMotorA();
       Serial1.print(F("[move ")); Serial1.print(moveId);
       Serial1.print(F("] Reached target: ")); Serial1.println(current, 2);
-      return true;
+      lastMoveError = ERR_NONE;
+      return ERR_NONE;
     }
 
     const bool forward = err > 0;
@@ -774,23 +925,25 @@ bool moveToAngle(float target, unsigned long timeoutMs) {
       brakeMotorA();
       Serial1.print(F("[move ")); Serial1.print(moveId);
       Serial1.println(F("] ERROR: stall detected, move aborted"));
-      return false;
+      lastMoveError = ERR_STALL;
+      return ERR_STALL;
     }
     if (millis() - start > timeoutMs) {
       brakeMotorA();
       Serial1.print(F("[move ")); Serial1.print(moveId);
       Serial1.println(F("] ERROR: move timeout, aborted"));
-      return false;
+      lastMoveError = ERR_TIMEOUT;
+      return ERR_TIMEOUT;
     }
 
     delay(5);
   }
 }
 
-bool commandMoveTo(float target, unsigned long timeoutMs) {
-  const bool ok = moveToAngle(target, timeoutMs);
-  if (!ok) targetAngleDeg = readAngleDeg();
-  return ok;
+uint8_t commandMoveTo(float target, unsigned long timeoutMs) {
+  const uint8_t err = moveToAngle(target, timeoutMs);
+  if (err != ERR_NONE) targetAngleDeg = readAngleDeg();
+  return err;
 }
 
 // ---------------------------
@@ -842,8 +995,9 @@ void setFeedPitchMm(float mm) {
 }
 
 // Relative move: advance (or retreat, if mm is negative) by a physical
-// distance from wherever the wheel currently is.
-bool moveByMm(float mm, unsigned long timeoutMs) {
+// distance from wherever the wheel currently is. Returns an ERR_* code
+// (ERR_NONE on success), not a bool - see moveToAngle().
+uint8_t moveByMm(float mm, unsigned long timeoutMs) {
   targetAngleDeg = normalizeDeg(targetAngleDeg + degForMm(mm));
   return commandMoveTo(targetAngleDeg, timeoutMs);
 }
@@ -854,8 +1008,9 @@ bool moveByMm(float mm, unsigned long timeoutMs) {
 // first pocket under the nozzle; moveToTapeZeroPlusMm(N * pitchMm) goes
 // to the Nth pocket from zero. Requires setTapeZeroHere() to have been
 // called for the current component - callers should check
-// tapeZeroRaw != TAPE_ZERO_UNSET first.
-bool moveToTapeZeroPlusMm(float mm, unsigned long timeoutMs) {
+// tapeZeroRaw != TAPE_ZERO_UNSET first (CMD_FEED_NEXT/FEED do, returning
+// ERR_NOT_READY otherwise rather than moving to a meaningless position).
+uint8_t moveToTapeZeroPlusMm(float mm, unsigned long timeoutMs) {
   const float zeroDeg = raw12ToAngleDeg(cfg.tapeZeroRaw) + degForMm(PICK_OFFSET_MM);
   targetAngleDeg = normalizeDeg(zeroDeg + degForMm(mm));
   return commandMoveTo(targetAngleDeg, timeoutMs);
@@ -863,7 +1018,8 @@ bool moveToTapeZeroPlusMm(float mm, unsigned long timeoutMs) {
 
 // Advance by exactly one configured pick pitch (cfg.feedHalfTeeth) from
 // the current position - what a real pick sequence calls between picks.
-bool feedOnePitch(unsigned long timeoutMs) {
+uint8_t feedOnePitch(unsigned long timeoutMs) {
+  if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) { lastMoveError = ERR_NOT_READY; return ERR_NOT_READY; }
   return moveByMm(mmForHalfTeeth(cfg.feedHalfTeeth), timeoutMs);
 }
 
@@ -942,6 +1098,9 @@ void printStatus() {
   Serial1.print(invertMotorA ? F("Y") : F("N"));
   Serial1.print(F(" invertB="));
   Serial1.print(invertMotorB ? F("Y") : F("N"));
+  Serial1.print(F(" tapeWidthMm="));
+  if (hwInfo.tapeWidthMm == TAPE_WIDTH_UNSET) Serial1.print(F("UNSET"));
+  else Serial1.print(hwInfo.tapeWidthMm);
   Serial1.print(F(" angle="));
   Serial1.print(readAngleDeg(), 2);
   Serial1.print(F(" target="));
@@ -949,7 +1108,9 @@ void printStatus() {
   Serial1.print(F(" | "));
   printMagnetLine(false);
   Serial1.print(F(" | i2cErrors="));
-  Serial1.println(i2cErrorCount);
+  Serial1.print(i2cErrorCount);
+  Serial1.print(F(" lastMoveErr="));
+  Serial1.println(lastMoveError);
 }
 
 void printHelp() {
@@ -959,6 +1120,11 @@ void printHelp() {
   Serial1.println(F("  LED ON / LED OFF  external LED (PB5/D13) on/off"));
   Serial1.println(F("  INVERTA ON/OFF  flip motor A direction (mirrors CMD_SET_INVERT_DIR)"));
   Serial1.println(F("  INVERTB ON/OFF  flip motor B direction (mirrors CMD_SET_INVERT_DIR)"));
+  Serial1.println(F("  IDENTIFY [n]    blink status LED white n times (default 3), mirrors"));
+  Serial1.println(F("                  CMD_IDENTIFY - find which physical unit an address is"));
+  Serial1.println(F("  SETWIDTH <mm>   set this unit's tape width (8/12/16/24/32/44/56),"));
+  Serial1.println(F("                  assembly/bench-time only - not reset by anything else,"));
+  Serial1.println(F("                  mirrors CMD_SET_HW_INFO"));
   Serial1.println(F("  WHOAMI          print bus address + loaded component config"));
   Serial1.println(F("  SIMADDR <n>     force bus address n locally (1-247), bench-only,"));
   Serial1.println(F("                  bypasses CMD_DISCOVER/CMD_ASSIGN_ADDR - for testing"));
@@ -993,13 +1159,27 @@ void handleDebugLine(String line) {
 
   if (upper == "STATUS") { printStatus(); return; }
   if (upper == "ZERO") { calibrateZero(); return; }
-  if (upper == "STOP") { brakeMotorA(); Serial1.println(F("Stopped.")); return; }
+  if (upper == "STOP") { brakeMotorA(); brakeMotorB(); Serial1.println(F("Stopped.")); return; }
   if (upper == "LED ON") { setExtLed(true); Serial1.println(F("External LED ON.")); return; }
   if (upper == "LED OFF") { setExtLed(false); Serial1.println(F("External LED OFF.")); return; }
   if (upper == "INVERTA ON") { invertMotorA = true; Serial1.println(F("Motor A direction inverted.")); return; }
   if (upper == "INVERTA OFF") { invertMotorA = false; Serial1.println(F("Motor A direction normal.")); return; }
   if (upper == "INVERTB ON") { invertMotorB = true; Serial1.println(F("Motor B direction inverted.")); return; }
   if (upper == "INVERTB OFF") { invertMotorB = false; Serial1.println(F("Motor B direction normal.")); return; }
+  if (upper == "IDENTIFY" || upper.startsWith("IDENTIFY ")) {
+    const int n = upper.length() > 8 ? upper.substring(9).toInt() : 0;
+    identifyBlink(n > 0 ? (uint8_t)n : 3);
+    return;
+  }
+  if (upper.startsWith("SETWIDTH ")) {
+    const int mm = upper.substring(9).toInt();
+    if (!setTapeWidthMm((uint8_t)mm)) {
+      Serial1.println(F("Refused: width must be one of 8/12/16/24/32/44/56."));
+    } else {
+      Serial1.print(F("Tape width set: ")); Serial1.print(mm); Serial1.println(F("mm"));
+    }
+    return;
+  }
   if (upper == "HELP" || upper == "?") { printHelp(); return; }
   if (upper == "TRACE ON") { traceMoveEnabled = true; return; }
   if (upper == "TRACE OFF") { traceMoveEnabled = false; return; }
@@ -1131,6 +1311,7 @@ void setup() {
 
   seedSessionNonce();
   loadConfig(); // busAddress always starts ADDR_UNASSIGNED - re-earned via CMD_DISCOVER each boot
+  loadHwInfo(); // tape width etc - set once at assembly, never reset by config changes
 
   Serial1.println(F("alpha01 feeder firmware ready"));
   printStatus();

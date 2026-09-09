@@ -35,6 +35,28 @@ exercised and validated for real** — not just bring-up sanity checks.
    see that section of this doc for the reasoning pattern. `printStatus()`
    (`STATUS`/`WHOAMI`) shows the current `invertA=`/`invertB=` state.
 
+4. **Full RS485 packet support**, not just enough to validate transport.
+   Now that alpha02 is headed for an actual live PnP test rather than
+   staying on the bench, the placeholder command set grew into what a real
+   host actually needs: `CMD_GET_STATUS` (live angle/magnet/fault/last-
+   error telemetry), `CMD_STOP` (remote e-stop, both motors), `CMD_IDENTIFY`
+   (blink the status LED so an operator can find a physical unit by bus
+   address), and proper `ERR_*` codes in `CMD_NACK` payloads instead of a
+   bare failure (so a host can log *why* a feed failed — stall, timeout,
+   fault, magnet lost, not-yet-calibrated — instead of just "didn't
+   work"). See `../PROTOCOL.md` for the full, current opcode table and
+   error code list — that file is now the source of truth for the wire
+   protocol, not this doc, so it doesn't drift across two copies.
+5. **Tape width is now a stored hardware-identity parameter**
+   (`FeederHardwareInfo.tapeWidthMm`, `CMD_GET/SET_HW_INFO`,
+   `SETWIDTH <mm>` debug command). Deliberately a separate EEPROM struct
+   from `FeederConfig`, with no reset path — see `../PROTOCOL.md` for why
+   this is fixed-per-unit data (mechanical, set once at assembly) rather
+   than per-component data, and does not affect the sprocket-feed math
+   at all (EIA-481 hole pitch is a fixed 4mm regardless of tape width) -
+   it exists purely so a host can validate reel/feeder compatibility and
+   for fleet inventory. Included in the `CMD_DISCOVER_HERE` reply.
+
 Everything else below (RS485 transport, addressing/discovery, tape-zero/
 distance-based motion, EEPROM component config, Modbus feasibility) is
 unchanged from `alpha01` and documented here for completeness, since
@@ -291,6 +313,16 @@ hardware) — see the `TODO` comment at its definition.
 
 ## Open questions (not resolved here)
 
+- `CMD_STOP` brakes motors but doesn't clear/report a fault condition —
+  if `PIN_nFAULT` is still asserted after a stop, the very next move will
+  immediately fail with `ERR_FAULT` again. That's arguably correct (don't
+  silently paper over a real fault), but a host driving this live should
+  know to distinguish "stopped, ready to move again" from "stopped because
+  something is actually wrong" via `CMD_GET_STATUS`'s `faultActive` field.
+- `hwInfo`'s EEPROM location (`EEPROM_HWINFO_LOCATION = 16`) was picked to
+  leave room for `FeederConfig` to grow without colliding - not derived
+  from `sizeof(FeederConfig)` automatically, so revisit both together if
+  either struct grows past that gap.
 - `invertMotorA`/`invertMotorB` are RAM-only (reset to `false` every
   reboot) — once real hardware confirms whether either needs inverting,
   decide whether that's per-unit variance (persist to EEPROM) or a fixed
