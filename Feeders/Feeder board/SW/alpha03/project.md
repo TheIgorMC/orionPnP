@@ -9,19 +9,19 @@ populated so far.
 
 ## What's different from alpha02
 
-1. **`PIN_EXT_LED` (D13/PB5, plain on/off, shared the ISP header's SCK
-   line) is retired**, replaced by a second, dedicated SK6812 pixel on its
-   own pin (`PIN_LED2_DATA`, A3/PC3 — unused/unpopulated on every V0.2a
-   board built so far, since it carried the old optical-interrupter
-   signals before the switch to the AS5600). Same job — lit "on request"
-   via `CMD_SET_EXT_LED` / `LED ON`/`OFF`, never auto-updated the way the
-   main status LED continuously repaints for magnet-detect — but now
-   color-capable. The color is a firmware constant (`EXT_LED2_R/G/B`),
-   deliberately *not* a runtime/bus parameter: pick a color during beta1
-   bring-up, tune it in source while that's happening, then leave it fixed
-   — the same pattern as `PICK_OFFSET_MM` in the tape-zero calibration.
-   Currently a placeholder blue, untested against real hardware (the LED
-   isn't populated on any board yet).
+1. **`PIN_EXT_LED` moves from D13/PB5 to A3/PC3.** The old pin shared the
+   ISP header's SCK line — mutually exclusive with flashing at any given
+   instant. A3/PC3 is unused/unpopulated on every V0.2a board built so far
+   (it carried the old optical-interrupter signals before the switch to
+   the AS5600), and isn't shared with anything else. Still a **standard
+   LED, plain on/off, direct GPIO drive** — ~20mA is comfortably inside the
+   ATmega328PB's 40mA absolute-maximum per-I/O-pin rating (Microchip
+   datasheet), the same current class as, e.g., the Arduino Uno's own
+   onboard LED, so no transistor is needed. Same command interface as
+   before (`CMD_SET_EXT_LED` / `LED ON`/`OFF`), unchanged. (This pin
+   briefly carried a dedicated SK6812 pixel instead of a plain LED during
+   initial beta1 planning — reverted once a standard LED was chosen, before
+   any hardware existed either way, so nothing built was ever affected.)
 2. **AT24CS02 support** — an I2C EEPROM plus a factory-programmed,
    read-only 128-bit unique serial number, sharing the existing I2C bus
    with the AS5600 (different address, no new pins). `FeederHardwareInfo`
@@ -32,7 +32,7 @@ populated so far.
    (`SERIAL` on the debug port) reads the factory serial. See
    `../PROTOCOL.md` for the full command reference.
 
-Neither of these exists on any board built so far. Every AT24CS02 access
+Neither of these is on any board built so far. Every AT24CS02 access
 degrades gracefully (checked `endTransmission`/`requestFrom`, same defensive
 pattern as the AS5600 code) if the chip isn't actually populated — this
 firmware should still boot and run motion/RS485 normally on a plain V0.2a
@@ -366,8 +366,6 @@ hardware) — see the `TODO` comment at its definition.
   EEPROM); this note is stale for alpha03 but kept for alpha02's own
   history — `FeederConfig` still lives in the ATmega's internal EEPROM
   either way.
-- `EXT_LED2_R/G/B` is an untuned placeholder (blue) — needs picking a real
-  color once the LED2 pixel actually exists on beta1 hardware.
 - AT24CS02 support (both the general EEPROM and the factory serial page)
   is written but **not validated against real silicon** — no beta1 board
   exists yet to test the address assumptions (`0x50`/`0x58`), the

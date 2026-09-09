@@ -80,7 +80,7 @@ see **Error codes** below; otherwise empty).
 | `CMD_ZERO_HERE` | `0x24` | — | `CMD_ACK` | captures current position as tape zero |
 | `CMD_SET_PITCH_MM` | `0x25` | `[mm]` (1 B) | `CMD_ACK`/`CMD_NACK` | auto-translated to `feedHalfTeeth` |
 | `CMD_FEED_NEXT` | `0x26` | — | `CMD_ACK` / `CMD_NACK[errCode]` | advance by configured pitch |
-| `CMD_SET_EXT_LED` | `0x27` | `[state]` (0/nonzero) | `CMD_ACK`/`CMD_NACK` | alpha01/02: plain LED, D13/PB5. alpha03: dedicated SK6812 (LED2, A3/PC3), color fixed in firmware |
+| `CMD_SET_EXT_LED` | `0x27` | `[state]` (0/nonzero) | `CMD_ACK`/`CMD_NACK` | standard LED, plain on/off. alpha01/02: D13/PB5 (shares the ISP header's SCK line). alpha03: A3/PC3 (own pin, no ISP conflict) |
 | `CMD_SET_INVERT_DIR` | `0x28` | `[motor(0=A,1=B), state(0/1)]` | `CMD_ACK`/`CMD_NACK` | RAM-only, resets on reboot |
 | `CMD_GET_HW_INFO` | `0x29` | — | `CMD_HW_INFO` (`0xA1`): `[tapeWidthMm]` | `0xFF` = unset |
 | `CMD_SET_HW_INFO` | `0x2A` | `[tapeWidthMm]` | `CMD_ACK`/`CMD_NACK` | assembly/bench-time only, validated against EIA-481 widths, no reset command |

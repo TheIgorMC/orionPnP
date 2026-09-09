@@ -16,7 +16,7 @@ Full design rationale for any of this: `alpha01/project.md` /
 | `STATUS` / `WHOAMI` | addr, component, tapeZero, pitch, angle/target, magnet health, i2cErrors (+ `invertA`/`invertB`/`tapeWidthMm`/`lastMoveErr` on alpha02+, `serial=` on alpha03, or `[RS485ECHO ON]` banner on alpha01 if active) |
 | `HELP` / `?` | print this command list |
 | `SIMADDR <n>` | force bus address `n` (1–247) locally, bench-only, skips `CMD_DISCOVER`/`CMD_ASSIGN_ADDR` |
-| `LED ON` / `LED OFF` | alpha01/02: external LED (D13/PB5) on/off. alpha03: dedicated SK6812 LED2 (A3/PC3), color fixed in firmware |
+| `LED ON` / `LED OFF` | standard external LED, plain on/off. alpha01/02: D13/PB5 (shares ISP header's SCK line). alpha03: A3/PC3 (own pin) |
 | `IDENTIFY [n]` | **alpha02+** — blink status LED white `n` times (default 3), mirrors `CMD_IDENTIFY` |
 | `SETWIDTH <mm>` | **alpha02+** — set this unit's tape width (8/12/16/24/32/44/56), assembly/bench-time, mirrors `CMD_SET_HW_INFO` (alpha02: ATmega EEPROM; alpha03: AT24CS02) |
 | `SERIAL` | **alpha03 only** — print the AT24CS02's factory-programmed 128-bit serial number as hex, mirrors `CMD_GET_SERIAL` |

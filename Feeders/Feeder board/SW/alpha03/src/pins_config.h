@@ -3,7 +3,7 @@
 /*
   alpha03 pin map (ATmega328PB-AU) - base is the real Feeder board schematic
   SCH_Feeder_V02.pdf, version V0.2a (MCU page) / V0.2b (Serial page), PLUS
-  one deliberate deviation from that schematic - see PIN_LED2_DATA below.
+  one deliberate deviation from that schematic - see PIN_EXT_LED below.
   alpha03 is the beta1 codebase: it gets ahead of a hardware change that
   doesn't exist on any built V0.2a board yet.
 
@@ -89,13 +89,19 @@ constexpr uint8_t PIN_FAULT_LED = 7; // separate simple board-fault LED, not par
 
 // SCHEMATIC DEVIATION from V0.2a/V0.2b, pending the beta1 revision: the
 // old PIN_EXT_LED (D13/PB5, a plain digital LED) shared the ISP header's
-// SCK line - mutually exclusive with ISP flashing at any given instant,
-// which made it awkward to use as a general "called on request" indicator
-// during bring-up/programming sessions. Replaced with a second, dedicated
-// SK6812 pixel on its own pin (A3/PC3), which is unused/unpopulated on
-// every V0.2a board built so far (it carried the old optical-interrupter
+// SCK line - mutually exclusive with ISP flashing at any given instant.
+// Moved to its own pin, A3/PC3, which is unused/unpopulated on every
+// V0.2a board built so far (it carried the old optical-interrupter
 // signals before the AS5600 switch - see Feeder-Design wiki page) and
 // isn't shared with anything else. No V0.2a board has this LED actually
 // wired up yet; this pin assignment is what beta1's schematic should
 // route it to.
-constexpr uint8_t PIN_LED2_DATA = A3; // PC3 - dedicated SK6812, on/off + color set in firmware, not the ISP header
+//
+// Standard red LED + series resistor sized for ~20mA, direct GPIO drive -
+// no transistor needed. 20mA is comfortably inside the ATmega328PB's
+// 40mA absolute-maximum DC current per I/O pin (Microchip datasheet,
+// "Absolute Maximum Ratings"), and is the conventional design point for
+// driving an LED straight off an AVR pin (same current class as, e.g.,
+// the Arduino Uno's own onboard LED) - not something that needed a
+// dedicated addressable LED or an external switch to handle safely.
+constexpr uint8_t PIN_EXT_LED = A3; // PC3 - standard LED, simple on/off, not the ISP header

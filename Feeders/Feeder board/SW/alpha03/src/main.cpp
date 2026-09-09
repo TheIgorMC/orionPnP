@@ -10,25 +10,23 @@
   runtime motor direction), with two hardware-facing changes that get ahead
   of a schematic revision rather than following one:
 
-  1. PIN_EXT_LED (D13/PB5, a plain on/off LED sharing the ISP header's SCK
-     line) is retired. In its place: a second, dedicated SK6812 pixel on
-     its own pin (PIN_LED2_DATA, A3/PC3 - unused/unpopulated on every V0.2a
-     board built so far). Same job as the old ext LED - lit "on request"
-     via CMD_SET_EXT_LED / LED ON-OFF, nothing auto-updates it the way
-     loop() continuously repaints the main status LED for magnet-detect -
-     but now RGB instead of a fixed single color. The color it lights is a
-     firmware constant (EXT_LED2_R/G/B), meant to be tuned once during
-     beta1 bring-up and then left alone, not a runtime/bus-settable
-     parameter - see the constant's comment.
+  1. PIN_EXT_LED moved from D13/PB5 (shared the ISP header's SCK line,
+     mutually exclusive with flashing) to its own pin, A3/PC3 - unused/
+     unpopulated on every V0.2a board built so far. Still a plain standard
+     LED, direct GPIO drive: ~20mA is comfortably inside the ATmega328PB's
+     40mA absolute-maximum per-I/O-pin rating, so no transistor is needed -
+     see pins_config.h. (Briefly a dedicated SK6812 pixel on this same pin
+     instead of a plain LED during initial beta1 planning; reverted once a
+     standard LED was chosen, before any hardware existed either way.)
   2. AT24CS02 support: an I2C EEPROM + factory-programmed 128-bit unique
      serial number, on the same I2C bus as the AS5600 (different address,
      no new pins). FeederHardwareInfo (tape width) now lives there instead
      of the ATmega's internal EEPROM - see "AT24CS02" section below for why
      and CMD_GET_SERIAL for reading the factory serial.
 
-  Neither the LED2 pin nor the AT24CS02 exist on any V0.2a board built so
-  far - this firmware is written for beta1's schematic before that
-  schematic exists. I2C reads/writes to the AT24CS02 use the same
+  Neither the moved LED pin nor the AT24CS02 exist on any V0.2a board
+  built so far - this firmware is written for beta1's schematic before
+  that schematic exists. I2C reads/writes to the AT24CS02 use the same
   checked-endTransmission/requestFrom defensive pattern as the AS5600 code,
   so running this on a board that doesn't have the chip populated degrades
   to "hardware info unavailable" rather than hanging - but none of this has
@@ -466,7 +464,7 @@ constexpr uint8_t CMD_RESET_CONFIG = 0x23;    // no payload -> CMD_ACK
 constexpr uint8_t CMD_ZERO_HERE = 0x24;       // no payload: capture current position as tape zero -> CMD_ACK
 constexpr uint8_t CMD_SET_PITCH_MM = 0x25;    // payload: [mm] (1 byte, whole mm) -> CMD_ACK
 constexpr uint8_t CMD_FEED_NEXT = 0x26;       // no payload: advance by configured pitch -> CMD_ACK/[errCode] on CMD_NACK
-constexpr uint8_t CMD_SET_EXT_LED = 0x27;     // payload: [state] (0=off, nonzero=on) -> CMD_ACK/CMD_NACK - dedicated SK6812 (LED2), color fixed in firmware
+constexpr uint8_t CMD_SET_EXT_LED = 0x27;     // payload: [state] (0=off, nonzero=on) -> CMD_ACK/CMD_NACK - standard LED, A3/PC3
 constexpr uint8_t CMD_SET_INVERT_DIR = 0x28;  // payload: [motor(0=A,1=B), state(0/1)] -> CMD_ACK/CMD_NACK
 
 // Hardware identity (tape width) - see FeederHardwareInfo above.
@@ -860,27 +858,16 @@ void driveMotorB(int duty, bool forward) {
 }
 
 // ---------------------------
-// LED2 (PIN_LED2_DATA, A3/PC3) - dedicated SK6812, replaces alpha02's
-// plain on/off ext LED on the ISP header's SCK line. Same job (lit "on
-// request" via CMD_SET_EXT_LED / LED ON-OFF, never auto-updated) but now
-// color-capable.
-//
-// EXT_LED2_R/G/B is what "on" lights up as. Deliberately a firmware
-// constant, not a runtime/bus parameter: the intent is to pick a color
-// during beta1 bring-up (easy to retune here while that's happening) and
-// then leave it fixed - same pattern as PICK_OFFSET_MM in the tape-zero
-// calibration. Placeholder blue until tuned on real hardware.
+// External LED (PIN_EXT_LED, A3/PC3) - standard LED + series resistor,
+// ~20mA direct GPIO drive, plain on/off. Same job as alpha02's ext LED
+// (lit "on request" via CMD_SET_EXT_LED / LED ON-OFF, never auto-updated)
+// just moved off the ISP header's SCK line onto its own pin - see
+// pins_config.h for why 20mA direct drive doesn't need a transistor here.
+// (alpha03 briefly used a dedicated SK6812 on this pin instead of a plain
+// LED; reverted once a standard LED was chosen for beta1.)
 // ---------------------------
-Adafruit_NeoPixel led2(1, PIN_LED2_DATA, NEO_GRB + NEO_KHZ800);
-
-constexpr uint8_t EXT_LED2_R = 0;
-constexpr uint8_t EXT_LED2_G = 0;
-constexpr uint8_t EXT_LED2_B = 255; // TODO: tune once on real beta1 hardware, then leave fixed
-
 void setExtLed(bool on) {
-  if (on) led2.setPixelColor(0, led2.Color(EXT_LED2_R, EXT_LED2_G, EXT_LED2_B));
-  else led2.clear();
-  led2.show();
+  digitalWrite(PIN_EXT_LED, on ? HIGH : LOW);
 }
 
 // ---------------------------
@@ -1209,8 +1196,7 @@ void printHelp() {
   Serial1.println(F("Debug port commands (newline terminated):"));
   Serial1.println(F("  A<deg> / T<index> / STEP+1 / STEP-1 / STEP+0.5 / STEP-0.5"));
   Serial1.println(F("  ZERO / STOP / STATUS / TRACE ON / TRACE OFF / HELP"));
-  Serial1.println(F("  LED ON / LED OFF  dedicated SK6812 LED2 (A3/PC3) on/off, color fixed"));
-  Serial1.println(F("                  in firmware (EXT_LED2_R/G/B)"));
+  Serial1.println(F("  LED ON / LED OFF  external LED (A3/PC3) on/off"));
   Serial1.println(F("  INVERTA ON/OFF  flip motor A direction (mirrors CMD_SET_INVERT_DIR)"));
   Serial1.println(F("  INVERTB ON/OFF  flip motor B direction (mirrors CMD_SET_INVERT_DIR)"));
   Serial1.println(F("  IDENTIFY [n]    blink status LED white n times (default 3), mirrors"));
@@ -1399,13 +1385,12 @@ void setup() {
   pinMode(PIN_nFAULT, INPUT_PULLUP);
   pinMode(PIN_FAULT_LED, OUTPUT);
   pinMode(PIN_RGB_DATA, OUTPUT);
-  pinMode(PIN_LED2_DATA, OUTPUT);
+  pinMode(PIN_EXT_LED, OUTPUT);
+  setExtLed(false);
 
   statusLed.begin();
   statusLed.clear();
   statusLed.show();
-  led2.begin();
-  setExtLed(false);
   showStartupLedSequence();
 
   brakeMotorA();
