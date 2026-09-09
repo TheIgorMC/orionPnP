@@ -6,34 +6,43 @@
 #include "pins_config.h"
 
 /*
-  alpha01 - first feeder firmware targeting the real board (V0.2a/V0.2b)
+  alpha02 - closed-loop feedback restored for real hardware bring-up with a
+  magnet mounted, plus runtime-selectable motor direction.
 
-  Supersedes TestBench04. Same AS5600 + DRV8833 closed-loop wheel-position
-  control (logic unchanged, only pins moved to pins_config.h to match the
-  real schematic), plus two things TestBench04 didn't have:
+  Forked from alpha01 after yesterday's bring-up commit (73e7448) had
+  temporarily rewired SW1/SW2 to jog motor A/B open-loop, because
+  moveToAngle() refuses to run without magnetDetected() and no magnet was
+  mounted yet on the bare test board. Now that a magnet is mounted:
 
-  1. RS485 transport on USART0 (D0/D1), with RE/DE direction control on D2
-     (PIN_RS485_RE), instead of USART0 doubling as an ad-hoc debug port.
-     All human-readable output moved to Serial1 (USART1, D11/D12 - shared
-     with the ISP programming header) so debug prints never leak onto the
-     live bus.
+  - SW1 goes back to what it was before that bring-up detour: a real
+    closed-loop +1 tooth jog via commandMoveTo()/moveToAngle(), so the
+    AS5600 feedback loop can actually be exercised and validated end to
+    end (stall/timeout/fault handling included, none of it bypassed).
+  - SW2 stays an open-loop motor B jog. This isn't a shortcut - motor B
+    (peel) has no encoder on this design at all, closed-loop control
+    doesn't apply to it the way it does to the sprocket motor, so there's
+    nothing to "restore" there.
+  - Motor direction (for both A and B independently) is now a RUNTIME flag
+    instead of the old compile-time INVERT_DIRECTION constant, since it's
+    not yet known whether either motor's leads are wired the way the
+    firmware assumes - see invertMotorA/invertMotorB, INVERTA/INVERTB
+    debug commands, and CMD_SET_INVERT_DIR below. Flipping a flag beats
+    reflashing or re-soldering leads while that's still being figured out
+    on the bench.
 
-  2. A minimal, deliberately NOT-Modbus framed protocol on top of that
-     transport, just enough to validate byte-level transport (RE/DE
-     switching timing, addressing, CRC) on real silicon before committing
-     to Modbus RTU or continuing OrionProtocol. See project.md for the
-     Modbus feasibility evaluation and the addressing scheme this
-     implements (persistent EEPROM address + a reserved "parking" address
-     for never-assigned feeders).
+  Everything else (RS485 transport, addressing/discovery, tape-zero/
+  distance-based motion, EEPROM component config) is unchanged from
+  alpha01 - see that project's project.md for the full design rationale.
+  alpha01 itself keeps evolving in parallel as a dedicated RS485 transport
+  test rig (see its own project.md, "RS485 echo test mode").
 
-  What alpha01 deliberately does NOT do yet:
-  - No interrupt-driven UART RX. Bytes are polled in loop() same as
-    TestBench04. Since moveToAngle() blocks synchronously for up to
-    MOVE_TIMEOUT_MS, and USART0 only has a 2-byte hardware buffer, any bus
-    traffic arriving mid-move today WILL be lost. This is fine for
-    bench-testing transport/addressing in isolation, but must be fixed
-    (RX ISR + ring buffer) before real bus traffic coexists with motion -
-    see project.md "Open questions".
+  What alpha02 deliberately does NOT do yet (inherited from alpha01):
+  - No interrupt-driven UART RX. Bytes are polled in loop(). Since
+    moveToAngle() blocks synchronously for up to MOVE_TIMEOUT_MS, and
+    USART0 only has a 2-byte hardware buffer, any bus traffic arriving
+    mid-move today WILL be lost. Fine for bench-testing in isolation, but
+    must be fixed (RX ISR + ring buffer) before real bus traffic coexists
+    with motion - see project.md "Open questions".
   - No Modbus RTU. The frame format below is a placeholder.
 */
 
@@ -82,17 +91,25 @@ const unsigned long MOVE_TIMEOUT_MS = 6000;
 const unsigned long STALL_TIMEOUT_MS = 800;
 const float STALL_MOVE_THRESHOLD_DEG = 0.15f;
 
-// Alpha hardware bring-up: both buttons jog their motor open-loop, no
-// AS5600 magnet required - moveToAngle() needs magnetDetected() to be true
-// or it aborts immediately, which doesn't hold on bare test hardware with
-// no magnet mounted yet. Not a real feature; SW1 should go back to
-// commandMoveTo() (closed-loop, tooth-stepped) once a magnet is in place.
+// SW2/motor B open-loop jog (see file header - motor B has no encoder on
+// this design, so there's no closed-loop equivalent to fall back to).
 const int   JOG_DUTY = FAST_DUTY;
 const unsigned long JOG_DURATION_MS = 300;
 
 const bool BUTTONS_ACTIVE_LOW = true;
 const unsigned long DEBOUNCE_MS = 20;
-const bool INVERT_DIRECTION = false;
+
+// Runtime-flippable motor direction (replaces alpha01's compile-time
+// INVERT_DIRECTION constant). Neither motor's lead polarity relative to
+// this firmware's "forward" has been confirmed on real hardware yet -
+// these let it be corrected from the debug port or the bus (INVERTA/
+// INVERTB, CMD_SET_INVERT_DIR) without reflashing or re-soldering.
+// Independent per motor since there's no reason A and B would necessarily
+// need the same correction. RAM-only for now (reset to false on reboot) -
+// see project.md if this turns out to be a fixed-per-unit characteristic
+// worth persisting to EEPROM instead.
+bool invertMotorA = false;
+bool invertMotorB = false;
 
 // Both UARTs share the same 8MHz internal RC oscillator (~2% tolerance),
 // so both stay at 9600 - see TestBench04/project.md for why 115200 is
@@ -259,20 +276,6 @@ void rs485Write(const uint8_t *buf, uint8_t len) {
   digitalWrite(PIN_RS485_RE, LOW); // back to listening
 }
 
-// RS485 echo test mode: bypasses the framed protocol entirely and mirrors
-// every received byte straight back out, unmodified. Purpose is purely to
-// validate the RS485 hardware/wiring/RE-DE turnaround in isolation, before
-// trusting anything about framing/CRC/addressing - point a USB-RS485
-// adapter at the bus, send arbitrary bytes, and see them echoed back with
-// no assumptions about protocol on either side. Off by default so normal
-// framed operation (CMD_DISCOVER etc.) isn't disturbed; toggle with
-// RS485ECHO ON/OFF on the debug port. Deliberately byte-at-a-time (one
-// rs485Write() per received byte, not batched) - that's a MORE thorough
-// test of RE/DE turnaround timing than batching would be, since every
-// single byte round-trips the direction switch, not just the first one in
-// a burst.
-bool rs485EchoMode = false;
-
 uint8_t crc8(const uint8_t *data, uint8_t len) {
   uint8_t crc = 0x00;
   for (uint8_t i = 0; i < len; i++) {
@@ -312,6 +315,7 @@ constexpr uint8_t CMD_ZERO_HERE = 0x24;       // no payload: capture current pos
 constexpr uint8_t CMD_SET_PITCH_MM = 0x25;    // payload: [mm] (1 byte, whole mm) -> CMD_ACK
 constexpr uint8_t CMD_FEED_NEXT = 0x26;       // no payload: advance by configured pitch -> CMD_ACK/CMD_NACK
 constexpr uint8_t CMD_SET_EXT_LED = 0x27;     // payload: [state] (0=off, nonzero=on) -> CMD_ACK/CMD_NACK
+constexpr uint8_t CMD_SET_INVERT_DIR = 0x28;  // payload: [motor(0=A,1=B), state(0/1)] -> CMD_ACK/CMD_NACK
 
 constexpr uint8_t CMD_ACK = 0x82;
 constexpr uint8_t CMD_NACK = 0x83;
@@ -426,6 +430,13 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
       sendFrame(CMD_ACK, payload, 1);
       break;
     }
+    case CMD_SET_INVERT_DIR: {
+      if (len < 2 || payload[0] > 1) { sendFrame(CMD_NACK, nullptr, 0); break; }
+      if (payload[0] == 0) invertMotorA = (payload[1] != 0);
+      else invertMotorB = (payload[1] != 0);
+      sendFrame(CMD_ACK, payload, 2);
+      break;
+    }
     default:
       break; // unknown command, ignore
   }
@@ -436,10 +447,6 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
 void rs485Poll() {
   while (Serial.available()) {
     const uint8_t b = Serial.read();
-    if (rs485EchoMode) {
-      rs485Write(&b, 1);
-      continue; // frame state machine is not fed while echo mode is on
-    }
     switch (rxState) {
       case WAIT_START:
         if (b == FRAME_START) { rxLen = 0; rxState = WAIT_ADDR; }
@@ -614,7 +621,7 @@ void brakeMotorA() {
 
 void driveMotorA(int duty, bool forward) {
   duty = constrain(duty, 0, 255);
-  const bool effectiveForward = INVERT_DIRECTION ? !forward : forward;
+  const bool effectiveForward = invertMotorA ? !forward : forward;
   if (effectiveForward) {
     analogWrite(PIN_AIN1, duty);
     digitalWrite(PIN_AIN2, LOW);
@@ -638,7 +645,8 @@ void brakeMotorB() {
 
 void driveMotorB(int duty, bool forward) {
   duty = constrain(duty, 0, 255);
-  if (forward) {
+  const bool effectiveForward = invertMotorB ? !forward : forward;
+  if (effectiveForward) {
     analogWrite(PIN_BIN1, duty);
     digitalWrite(PIN_BIN2, LOW);
   } else {
@@ -918,7 +926,6 @@ void calibrateZero() {
 // Debug port (Serial1): status/help + local component config for bench use
 // ---------------------------
 void printStatus() {
-  if (rs485EchoMode) Serial1.println(F("[RS485ECHO ON - framed protocol disabled]"));
   Serial1.print(F("addr="));
   if (busAddress == ADDR_UNASSIGNED) Serial1.print(F("UNASSIGNED"));
   else Serial1.print(busAddress);
@@ -931,6 +938,10 @@ void printStatus() {
   Serial1.print(F(" pitchMm="));
   if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) Serial1.print(F("UNSET"));
   else Serial1.print(mmForHalfTeeth(cfg.feedHalfTeeth), 1);
+  Serial1.print(F(" invertA="));
+  Serial1.print(invertMotorA ? F("Y") : F("N"));
+  Serial1.print(F(" invertB="));
+  Serial1.print(invertMotorB ? F("Y") : F("N"));
   Serial1.print(F(" angle="));
   Serial1.print(readAngleDeg(), 2);
   Serial1.print(F(" target="));
@@ -946,11 +957,8 @@ void printHelp() {
   Serial1.println(F("  A<deg> / T<index> / STEP+1 / STEP-1 / STEP+0.5 / STEP-0.5"));
   Serial1.println(F("  ZERO / STOP / STATUS / TRACE ON / TRACE OFF / HELP"));
   Serial1.println(F("  LED ON / LED OFF  external LED (PB5/D13) on/off"));
-  Serial1.println(F("  RS485ECHO ON/OFF  bypass framing, mirror every RS485 byte straight"));
-  Serial1.println(F("                  back out - for validating the transceiver/wiring/RE-DE"));
-  Serial1.println(F("                  turnaround with a raw byte source, before trusting"));
-  Serial1.println(F("                  framing/CRC at all. Only toggled here (debug port),"));
-  Serial1.println(F("                  never over the bus itself - see project.md"));
+  Serial1.println(F("  INVERTA ON/OFF  flip motor A direction (mirrors CMD_SET_INVERT_DIR)"));
+  Serial1.println(F("  INVERTB ON/OFF  flip motor B direction (mirrors CMD_SET_INVERT_DIR)"));
   Serial1.println(F("  WHOAMI          print bus address + loaded component config"));
   Serial1.println(F("  SIMADDR <n>     force bus address n locally (1-247), bench-only,"));
   Serial1.println(F("                  bypasses CMD_DISCOVER/CMD_ASSIGN_ADDR - for testing"));
@@ -988,16 +996,10 @@ void handleDebugLine(String line) {
   if (upper == "STOP") { brakeMotorA(); Serial1.println(F("Stopped.")); return; }
   if (upper == "LED ON") { setExtLed(true); Serial1.println(F("External LED ON.")); return; }
   if (upper == "LED OFF") { setExtLed(false); Serial1.println(F("External LED OFF.")); return; }
-  if (upper == "RS485ECHO ON") {
-    rs485EchoMode = true;
-    Serial1.println(F("RS485 echo mode ON - framed protocol disabled, bytes mirrored raw."));
-    return;
-  }
-  if (upper == "RS485ECHO OFF") {
-    rs485EchoMode = false;
-    Serial1.println(F("RS485 echo mode OFF - normal framed protocol resumed."));
-    return;
-  }
+  if (upper == "INVERTA ON") { invertMotorA = true; Serial1.println(F("Motor A direction inverted.")); return; }
+  if (upper == "INVERTA OFF") { invertMotorA = false; Serial1.println(F("Motor A direction normal.")); return; }
+  if (upper == "INVERTB ON") { invertMotorB = true; Serial1.println(F("Motor B direction inverted.")); return; }
+  if (upper == "INVERTB OFF") { invertMotorB = false; Serial1.println(F("Motor B direction normal.")); return; }
   if (upper == "HELP" || upper == "?") { printHelp(); return; }
   if (upper == "TRACE ON") { traceMoveEnabled = true; return; }
   if (upper == "TRACE OFF") { traceMoveEnabled = false; return; }
@@ -1176,13 +1178,11 @@ void loop() {
   digitalWrite(PIN_FAULT_LED, LOW);
 
   if (buttonPressed(PIN_SW1, lastSw1EdgeMs)) {
-    Serial1.println(F("SW1: jogging motor A (open-loop)"));
-    driveMotorA(JOG_DUTY, true);
-    delay(JOG_DURATION_MS);
-    brakeMotorA();
+    targetAngleDeg = normalizeDeg(targetAngleDeg + DEG_PER_TOOTH);
+    commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
   }
   if (buttonPressed(PIN_SW2, lastSw2EdgeMs)) {
-    Serial1.println(F("SW2: jogging motor B (open-loop)"));
+    Serial1.println(F("SW2: jogging motor B (open-loop, no encoder on this motor)"));
     driveMotorB(JOG_DUTY, true);
     delay(JOG_DURATION_MS);
     brakeMotorB();

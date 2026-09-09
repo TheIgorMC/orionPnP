@@ -1,6 +1,48 @@
-# alpha01 — feeder firmware, real board, RS485 added
+# alpha02 — closed-loop feedback restored, runtime motor direction
 
-Supersedes `TestBench04` (deleted). Same ATmega328PB-AU target, same
+Forked from `alpha01` (commit `73e7448`, "fix status LED timing/color, add
+motor B + magnet-detect debug aids"). That commit had temporarily rewired
+SW1/SW2 to jog motor A/B open-loop, purely because `moveToAngle()` refuses
+to run without `magnetDetected()` and no magnet was mounted on the bare
+test board yet. `alpha02` exists for the next stage: **a board with a
+magnet actually mounted, so the AS5600 closed-loop feedback path can be
+exercised and validated for real** — not just bring-up sanity checks.
+
+## What's different from alpha01
+
+1. **SW1 is closed-loop again.** Back to `commandMoveTo()`/`moveToAngle()`
+   (+1 tooth per press) instead of the open-loop timed jog — this is the
+   actual thing worth testing now that a magnet exists: stall detection,
+   timeout, fault handling, and the AS5600 angle read all get exercised
+   end to end, not bypassed.
+2. **SW2 stays open-loop**, unchanged from `alpha01`. This isn't a
+   shortcut — motor B (peel) has no encoder on this board at all, so
+   there's no closed-loop behavior to "restore" for it. It's still a
+   plain timed jog for wiring/driver-channel sanity checks.
+3. **Motor direction is now a runtime flag, not a compile-time constant.**
+   Neither motor's lead polarity relative to this firmware's notion of
+   "forward" has been confirmed against real wiring yet. `invertMotorA`/
+   `invertMotorB` (independent per motor) can be flipped from the debug
+   port (`INVERTA ON/OFF`, `INVERTB ON/OFF`) or the bus
+   (`CMD_SET_INVERT_DIR`, payload `[motor(0=A,1=B), state(0/1)]`) without
+   reflashing or re-soldering. Both default to `false` (matching the old
+   `INVERT_DIRECTION` default) and reset to that on every reboot — this is
+   a bring-up convenience, not yet persisted to EEPROM. If it turns out to
+   be a fixed characteristic of every unit of this design (e.g. a
+   consistent connector/lead convention issue rather than per-unit
+   variance), it's a good candidate to hardcode as a constant later, the
+   same way `PICK_OFFSET_MM` was pulled out of the tape-zero calibration —
+   see that section of this doc for the reasoning pattern. `printStatus()`
+   (`STATUS`/`WHOAMI`) shows the current `invertA=`/`invertB=` state.
+
+Everything else below (RS485 transport, addressing/discovery, tape-zero/
+distance-based motion, EEPROM component config, Modbus feasibility) is
+unchanged from `alpha01` and documented here for completeness, since
+`alpha02` carries the whole file forward rather than diffing against it.
+
+---
+
+Same ATmega328PB-AU target, same
 DRV8833 + AS5600 closed-loop wheel-position logic, but two changes:
 
 1. **Pins now match the real board schematic** (`SCH_Feeder_V02.pdf`,
@@ -245,40 +287,14 @@ baked into the stored zero value.
 `PICK_OFFSET_MM` currently defaults to `0.0` (not yet measured on real
 hardware) — see the `TODO` comment at its definition.
 
-### RS485 echo test mode
-
-`alpha01` also carries a dedicated transport-validation mode, since
-`alpha01` remains the RS485 transport test rig in parallel with `alpha02`
-(closed-loop bring-up). `RS485ECHO ON` (debug port only, `handleDebugLine`)
-bypasses the framed protocol entirely: every byte received on USART0 is
-mirrored straight back out via `rs485Write()`, one byte at a time, with no
-assumption of framing, addressing, or CRC on either end. `RS485ECHO OFF`
-restores normal operation.
-
-The point is to validate the physical RS485 path (MAX1487 transceiver,
-wiring, RE/DE turnaround) in isolation, before trusting anything about the
-higher-level protocol: point a USB-RS485 adapter at the bus, send
-arbitrary bytes with a terminal, and confirm they come back unchanged.
-Doing this byte-at-a-time rather than batching a burst is deliberate — it
-exercises the RE/DE direction switch on every single byte, which is a more
-thorough turnaround-timing test than echoing back a whole received burst
-at once would be.
-
-Only toggleable from the debug port (Serial1), never over the bus itself —
-if the bus were already reliable enough to carry a command that turns echo
-mode on, there'd be nothing left to validate.
-
 ---
 
 ## Open questions (not resolved here)
 
-- RS485 echo mode is unauthenticated and always-on-when-enabled: while
-  active, this feeder will echo (and thus load the bus with) literally any
-  byte it sees, including other feeders' normal framed traffic if it's
-  ever left on accidentally with a host or other feeders active. Bench-only
-  by design — worth a startup warning or auto-timeout if it turns out to
-  get left on by mistake in practice.
-
+- `invertMotorA`/`invertMotorB` are RAM-only (reset to `false` every
+  reboot) — once real hardware confirms whether either needs inverting,
+  decide whether that's per-unit variance (persist to EEPROM) or a fixed
+  design characteristic (hardcode as a constant, like `PICK_OFFSET_MM`).
 - `PICK_OFFSET_MM` is a placeholder (`0.0`) — needs measuring once with a
   camera on real hardware, per "Tape zero calibration, v2" above.
 - Modbus RTU vs. continuing/extending `OrionProtocol` — the flash/RAM/
