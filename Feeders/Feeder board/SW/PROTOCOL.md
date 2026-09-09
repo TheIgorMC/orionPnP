@@ -1,17 +1,20 @@
-# Feeder RS485 Protocol (alpha02) — current state
+# Feeder RS485 Protocol (alpha03) — current state
 
 This is the canonical spec for the frame protocol implemented in
-`alpha02/src/main.cpp` (the firmware headed for a live PnP test), kept
-separate from `alpha01`/`alpha02`'s `project.md` files so it doesn't drift
-out of sync across two copies. Still **not Modbus** — see
+`alpha03/src/main.cpp` (the beta1 codebase), kept separate from
+`alpha01`/`alpha02`/`alpha03`'s `project.md` files so it doesn't drift out
+of sync across three copies. Still **not Modbus** — see
 `alpha01/project.md`'s Modbus feasibility section for why that's still an
-open decision; this is what's actually implemented today, upgraded from a
-bench-only placeholder now that alpha02 is heading onto real hardware.
+open decision; this is what's actually implemented today.
 
-`alpha01` implements a subset of this (everything up to and including
-`CMD_SET_INVERT_DIR`'s predecessor commands, minus hardware info/status/
-stop/identify) plus its own `RS485ECHO` debug-only test mode — see
-`alpha01/project.md`.
+- `alpha02` implements everything here up to and including `CMD_IDENTIFY`
+  — i.e. everything except `CMD_GET_SERIAL`, and its `CMD_DISCOVER_HERE`/
+  `CMD_GET_HW_INFO`/`CMD_SET_HW_INFO` read/write `FeederHardwareInfo` from
+  the ATmega's internal EEPROM, not an AT24CS02 (alpha02 doesn't have one).
+- `alpha01` implements a smaller subset still (everything up to and
+  including `CMD_SET_EXT_LED`, no hardware info/status/stop/identify/
+  serial) plus its own `RS485ECHO` debug-only test mode.
+- See `alpha01/project.md`.
 
 ## Physical layer
 
@@ -77,13 +80,14 @@ see **Error codes** below; otherwise empty).
 | `CMD_ZERO_HERE` | `0x24` | — | `CMD_ACK` | captures current position as tape zero |
 | `CMD_SET_PITCH_MM` | `0x25` | `[mm]` (1 B) | `CMD_ACK`/`CMD_NACK` | auto-translated to `feedHalfTeeth` |
 | `CMD_FEED_NEXT` | `0x26` | — | `CMD_ACK` / `CMD_NACK[errCode]` | advance by configured pitch |
-| `CMD_SET_EXT_LED` | `0x27` | `[state]` (0/nonzero) | `CMD_ACK`/`CMD_NACK` | debug LED, D13/PB5 |
+| `CMD_SET_EXT_LED` | `0x27` | `[state]` (0/nonzero) | `CMD_ACK`/`CMD_NACK` | alpha01/02: plain LED, D13/PB5. alpha03: dedicated SK6812 (LED2, A3/PC3), color fixed in firmware |
 | `CMD_SET_INVERT_DIR` | `0x28` | `[motor(0=A,1=B), state(0/1)]` | `CMD_ACK`/`CMD_NACK` | RAM-only, resets on reboot |
 | `CMD_GET_HW_INFO` | `0x29` | — | `CMD_HW_INFO` (`0xA1`): `[tapeWidthMm]` | `0xFF` = unset |
 | `CMD_SET_HW_INFO` | `0x2A` | `[tapeWidthMm]` | `CMD_ACK`/`CMD_NACK` | assembly/bench-time only, validated against EIA-481 widths, no reset command |
 | `CMD_GET_STATUS` | `0x30` | — | `CMD_STATUS_INFO` (`0xA2`): `[angleRawHi,angleRawLo,as5600Status,faultActive,lastMoveErr]` | live telemetry |
 | `CMD_STOP` | `0x31` | — | `CMD_ACK` | immediate brake, both motors |
 | `CMD_IDENTIFY` | `0x32` | `[blinkCount]` (0 ⇒ default 3) | `CMD_ACK` (after blinking) | white LED flashes, distinct from the magnet-status green/red |
+| `CMD_GET_SERIAL` | `0x33` | **alpha03 only** — — | `CMD_SERIAL_INFO` (`0xA3`): 16 bytes | AT24CS02 factory-programmed 128-bit serial number; `CMD_NACK` if the chip didn't respond |
 
 ## Error codes
 
@@ -110,7 +114,8 @@ for the full reasoning:
 
 - **`FeederConfig`** (component id, tape zero, feed pitch) — reset
   whenever `componentId` changes or on an explicit `CMD_RESET_CONFIG`.
-  This is "what's currently loaded."
+  This is "what's currently loaded." Always the ATmega's internal EEPROM,
+  on every firmware version.
 - **`FeederHardwareInfo`** (tape width) — set once at
   assembly/bench-test time, never reset by anything else. This is "what
   this physical unit is," fixed by its mechanical build (tape guide/rail
@@ -120,6 +125,36 @@ for the full reasoning:
   informational, for a host to validate reel compatibility and for fleet/
   inventory management. Included in the `CMD_DISCOVER_HERE` reply so a
   host learns it immediately without a separate query in the common case.
+  Storage location differs by version: alpha01/02 keep it in the ATmega's
+  internal EEPROM (same as `FeederConfig`, different address); **alpha03
+  moves it onto the AT24CS02's EEPROM** (byte offset `0x00`), so it
+  survives even a full chip-erase/reflash of the ATmega, not just a
+  component change — see `alpha03/project.md`.
+
+### AT24CS02 (alpha03 only)
+
+I2C EEPROM + factory-programmed, read-only 128-bit unique serial number,
+on the same I2C bus as the AS5600 (`SDA`/`SCL`, different address, no new
+pins). Two I2C device-select addresses per the datasheet — not two memory
+regions within one address:
+
+- `0x50` — general-purpose EEPROM (read/write). `FeederHardwareInfo` lives
+  at byte offset `0x00` here.
+- `0x58` — identification page (read-only, factory-programmed). The
+  128-bit serial number is read from byte offset `0x00` of this address,
+  16 bytes, exposed via `CMD_GET_SERIAL`.
+
+Not present on any V0.2a board built so far — `alpha03` is the first
+firmware to expect it, ahead of the beta1 schematic actually adding it.
+Every access is written to degrade gracefully (checked
+`endTransmission`/`requestFrom`, same defensive pattern as the AS5600
+code) rather than hang if the chip isn't populated: `CMD_GET_HW_INFO`
+reports `tapeWidthMm = 0xFF` (unset) and `CMD_GET_SERIAL` replies
+`CMD_NACK` instead of crashing or blocking. **None of this has been
+validated against real AT24CS02 silicon** — the address assumptions,
+the identification-page layout, and the fixed 5ms write-cycle delay (no
+ack-polling implemented) are all from the datasheet, not from a working
+board.
 
 ## Not yet in this protocol
 
