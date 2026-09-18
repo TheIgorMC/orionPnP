@@ -13,13 +13,14 @@ outputs. None of this is on any board built so far.
    on the 12V rail (RIMON=309kΩ, 1%, per TI's calculator), voltage
    proportional to load current: ~4.07V at the 200mA design max load,
    linear through the origin. `readIMonRaw()` (raw ADC) and
-   `readIMonMilliamps()` (converted, using the 4.07V/200mA calibration
-   point) are both exposed — `IMON` debug command, `iMonMa`/`iMonRaw` in
-   `STATUS`, `iMonRaw` still what goes out over `CMD_STATUS_INFO` (mA
-   conversion is done on the receiving end from that same raw value).
-   TPS26600's `EN`/`FLT#` pins are not wired to the MCU — can't be, since
-   the MCU only runs once the eFuse is already on, so there's no fault
-   state where firmware could still be alive to report it.
+   `readIMonMilliamps()` (converted, through a hand-calibratable point —
+   see "Hand calibration" below) are both exposed — `IMON` debug command,
+   `iMonMa`/`iMonRaw` in `STATUS`, `iMonRaw` still what goes out over
+   `CMD_STATUS_INFO` (mA conversion happens on the receiving end from that
+   same raw value). TPS26600's `EN`/`FLT#` pins are not wired to the MCU —
+   can't be, since the MCU only runs once the eFuse is already on, so
+   there's no fault state where firmware could still be alive to report
+   it.
 2. **`PIN_5V_READY` (A7/PE3) + `PIN_485_RELAY` (D13/PB5)** — a power-up
    sequencing feature: the 5V rail is monitored via a 4.7k/1k divider until
    it reads stable for `RELAY_READY_STABLE_MS` (500ms), and only then is
@@ -75,6 +76,59 @@ stability check compares consecutive raw ADC readings to each other (a
 plateau detector), not against a hardcoded voltage, so it works with
 whatever ratio is populated as long as it doesn't clip too early. Only
 the comments/constants describing the expected reading needed updating.
+
+### Hand calibration
+
+The datasheet/calculator math above gives a good starting point, but the
+real scale of both signals depends on the actual resistor/RIMON tolerance
+populated on a given physical board — 1% parts, but still not exact.
+`AnalogCalibration` stores a single `(raw ADC, real-world value)` point
+per signal — `imonCalRaw`/`imonCalMa` and `v5vCalRaw`/`v5vCalMv` — and both
+conversions (`readIMonMilliamps()`, `read5vRailMillivolts()`) are linear
+through the origin from that point, which is true of the underlying
+hardware either way (a resistor divider, and a current-mirror IMON
+output). Lives in the ATmega's own internal EEPROM, separate from both
+`FeederConfig` and `FeederHardwareInfo` — same reasoning as
+`FeederHardwareInfo` already has for not being touched by a component
+change or `RESETCFG`, just for a different flavor of "this shouldn't
+reset": it's bench/electrical calibration for this board's analog
+frontend, not tape-handling identity, so it doesn't need the AT24CS02 —
+an EEPROM read/write already works before any I2C peripheral is even
+populated.
+
+Debug-port-only commands (bench/jig use, same category as `RELAY`/`IMON`/
+`5VSTATUS` — deliberately no bus opcodes, since a feeder that still needs
+calibrating wouldn't have a working bus link to reach anyway):
+
+- **`CALI <mA>`** — capture the current `PIN_I_MON` raw ADC reading
+  against a real load current read off a bench ammeter right now.
+- **`CALV <V>`** — capture the current `PIN_5V_READY` raw ADC reading
+  (internal 1.1V reference) against a real 5V-rail reading off a bench
+  multimeter right now.
+- **`CALSTATUS`** — print both stored calibration points.
+- **`CALRESET`** — revert both to the factory-calculated defaults
+  (`IMON_CAL_DEFAULT_*`/`V5V_CAL_DEFAULT_*` constants, derived from the
+  same numbers as the sections above).
+
+Meant for once a bed-of-nails test jig exists to make "apply a known
+load/rail voltage, read a real meter, run one command" fast and
+repeatable across boards, rather than trusting the nominal/datasheet math
+forever.
+
+### Estimating 5V-rail current (debug only)
+
+There's no direct current sense on the 5V rail — only IMON on the 12V
+input side. `estimateI5vMilliamps()` gives a rough stand-in from a simple
+power balance: `i5vEst = (12V_nominal * iMonMa) / v5vActualMv`, i.e.
+"assume the whole 12V input current is being converted down to 5V." Two
+things this ignores, both pushing the estimate high: conversion losses
+(assumes ~100% efficiency), and any load that draws straight off 12V
+without going through the 5V regulator at all — this board's motor driver
+does exactly that, so `i5vEstMa` reads well above the true 5V-rail current
+whenever a motor is actually running. Good enough as a "does this look
+roughly sane" bench check (`I5V` debug command, `i5vEstMa` in
+`STATUS`/`5VSTATUS`), not a real measurement — if that's ever needed,
+it'd want its own current-sense hardware on the 5V rail.
 
 ---
 

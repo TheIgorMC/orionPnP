@@ -22,6 +22,19 @@
      the ADC resolution, see pins_config.h). Read against the ATmega's
      INTERNAL 1.1V reference, not the default - see "Power sequencing"
      for why the default reference cannot work for this specific signal.
+  1b. Both of the above convert their raw ADC reading to a real-world
+     mA/mV through AnalogCalibration, a single (raw, real-world) point per
+     signal, persisted in the ATmega's internal EEPROM and hand-settable
+     on the bench with the CALI/CALV debug commands against a real
+     ammeter/multimeter - useful once a bed-of-nails test jig exists to
+     make that fast. Falls back to the factory-calculated defaults
+     (derived from the same numbers as points 1/2 above) until then. See
+     the struct's comment further down for why this is deliberately not
+     folded into FeederConfig or FeederHardwareInfo. estimateI5vMilliamps()
+     also derives a rough 5V-rail current estimate from these two readings
+     (IMON + 12V-nominal power balance) - debug/bench convenience only,
+     not a real measurement; see that function's comment for what it
+     ignores.
   3. PIN_485_RELAY (D13/PB5, reusing the pin PIN_EXT_LED vacated) - a
      MOSFET-driven relay coil that physically connects/disconnects this
      feeder's RS485 lines from the shared bus. Held disconnected until
@@ -243,6 +256,74 @@ void loadConfig() {
     cfg.componentId = COMPONENT_ID_UNSET;
     resetFeedConfig();
     saveConfig();
+  }
+}
+
+// ---------------------------
+// Analog calibration - beta1 only. IMON (TPS26600) and 5V_READY are both
+// resistor-divider/current-mirror signals whose actual scale depends on
+// real component tolerances on THIS physical board, not just the nominal
+// datasheet/calculator math baked into the constants below. Each is
+// stored as a single (raw ADC, real-world value) point and the firmware
+// assumes linear-through-the-origin from there (true for both signals'
+// underlying hardware - a resistor divider and a current-mirror IMON
+// output). Hand calibration (CALI/CALV debug commands) overwrites the
+// point with one measured against a real ammeter/multimeter on the bench
+// - e.g. once a bed-of-nails test jig exists to make that fast and
+// repeatable. Independent of FeederConfig - a component change or
+// RESETCFG must never touch this, same reasoning as FeederHardwareInfo.
+// Lives in the ATmega's own internal EEPROM (not the AT24CS02) - it's
+// bench/electrical calibration data for this board's analog frontend,
+// not part of the AT24CS02's tape-width/serial-number "what this unit
+// physically is for tape handling" role, and calibrating it doesn't
+// require an AT24CS02 to even be populated.
+// ---------------------------
+struct AnalogCalibration {
+  uint16_t imonCalRaw; // PIN_I_MON raw ADC reading at imonCalMa (default reference)
+  uint16_t imonCalMa;  // actual measured current (mA) at imonCalRaw, from a bench ammeter
+  uint16_t v5vCalRaw;  // PIN_5V_READY raw ADC reading at v5vCalMv (internal 1.1V reference)
+  uint16_t v5vCalMv;   // actual measured 5V-rail voltage (mV) at v5vCalRaw, from a bench multimeter
+  uint8_t crc;
+};
+
+constexpr int EEPROM_ANALOG_CAL_LOCATION = 16; // gap left after EEPROM_CONFIG_LOCATION, same pattern alpha02 used for hw info
+
+// Factory defaults, derived from the same TI-calculator/divider math as
+// the header comment and pins_config.h: TPS26600 IMON reads ~4070mV at
+// the 200mA design max load (RIMON=309k), and the 4.7k/1k 5V divider
+// reads ~816/1023 (against the internal 1.1V ref) at a healthy 5000mV
+// rail. Used only until CALI/CALV actually calibrate against real
+// hardware - see those commands' comments for the raw-count math.
+constexpr uint16_t IMON_CAL_DEFAULT_RAW = 833; // (4070mV * 1023) / 5000mV, default AVCC reference
+constexpr uint16_t IMON_CAL_DEFAULT_MA = 200;
+constexpr uint16_t V5V_CAL_DEFAULT_RAW = 816; // (5000mV / 5.7 divider * 1023) / 1100mV, internal 1.1V reference
+constexpr uint16_t V5V_CAL_DEFAULT_MV = 5000;
+
+AnalogCalibration analogCal;
+
+uint8_t analogCalCrc(const AnalogCalibration &a) {
+  return crc8(reinterpret_cast<const uint8_t *>(&a), sizeof(AnalogCalibration) - 1);
+}
+
+void resetAnalogCalToFactoryDefaults() {
+  analogCal.imonCalRaw = IMON_CAL_DEFAULT_RAW;
+  analogCal.imonCalMa = IMON_CAL_DEFAULT_MA;
+  analogCal.v5vCalRaw = V5V_CAL_DEFAULT_RAW;
+  analogCal.v5vCalMv = V5V_CAL_DEFAULT_MV;
+}
+
+void saveAnalogCal() {
+  analogCal.crc = analogCalCrc(analogCal);
+  EEPROM.put(EEPROM_ANALOG_CAL_LOCATION, analogCal);
+}
+
+void loadAnalogCal() {
+  EEPROM.get(EEPROM_ANALOG_CAL_LOCATION, analogCal);
+  if (analogCal.crc != analogCalCrc(analogCal) || analogCal.imonCalRaw == 0 || analogCal.v5vCalRaw == 0) {
+    // Blank/garbage EEPROM, or a stored point that would divide by zero -
+    // both start from the factory-default calibration point.
+    resetAnalogCalToFactoryDefaults();
+    saveAnalogCal();
   }
 }
 
@@ -940,20 +1021,45 @@ uint16_t readIMonRaw() {
   return analogRead(PIN_I_MON); // default AVCC reference - independent current-sense signal, not the rail itself
 }
 
-// TPS26600 IMON scaling, from the TI eFuse calculator at RIMON_sel=309k(1%):
-// VMON=4.07V at the 200mA design max load current, linear through the
-// origin (standard current-mirror IMON output). ADC read against the
-// default ~5.0V AVCC reference, so raw counts scale the same way. No EN/
-// FLT# pins from the TPS26600 are wired to the MCU - it can't be, since
-// the MCU only runs once the eFuse is already on, so there's no fault
-// state where firmware could still be reading a pin to report it.
-constexpr uint16_t IMON_VMON_MAX_MV = 4070; // mV at PIN_I_MON at the design max load current
-constexpr uint16_t IMON_MAX_DESIGN_MA = 200; // load current that produces IMON_VMON_MAX_MV
-constexpr uint16_t IMON_ADC_REF_MV = 5000; // nominal AVCC used as the default ADC reference
-
+// TPS26600 IMON (12V-side eFuse) and PIN_5V_READY (5V-rail divider) both
+// convert through AnalogCalibration's stored (raw, real-world) point,
+// linear through the origin - see the struct's comment above for why.
+// Falls back to the factory-calculated defaults until CALI/CALV are run
+// against real hardware. No EN/FLT# pins from the TPS26600 are wired to
+// the MCU - it can't be, since the MCU only runs once the eFuse is
+// already on, so there's no fault state where firmware could still be
+// reading a pin to report it.
 uint16_t readIMonMilliamps() {
   const uint32_t raw = readIMonRaw();
-  return (uint16_t)((raw * IMON_ADC_REF_MV * IMON_MAX_DESIGN_MA) / ((uint32_t)IMON_VMON_MAX_MV * 1023));
+  return (uint16_t)((raw * (uint32_t)analogCal.imonCalMa) / analogCal.imonCalRaw);
+}
+
+// Actual 5V-rail voltage, using the same internal-1.1V-reference read
+// waitFor5vStableAndEngageRelay() uses for its plateau check, converted
+// through the calibrated (raw, mV) point instead of left as a raw count.
+uint16_t read5vRailMillivolts() {
+  const uint32_t raw = readAdcInternalRef(PIN_5V_READY);
+  return (uint16_t)((raw * (uint32_t)analogCal.v5vCalMv) / analogCal.v5vCalRaw);
+}
+
+// Rough debug-only estimate of the 5V rail's load current, from a simple
+// power balance: assumes the 12V input rail is at its nominal value and
+// that ALL of the measured 12V-side input current (IMON) is being
+// converted down to the 5V rail. Two things this ignores, both of which
+// make this an OVER-estimate in practice: conversion losses (~100%
+// efficiency assumed), and any load that draws straight off 12V without
+// going through the 5V regulator at all - this board's motor driver does
+// exactly that, so i5vEst reads high whenever a motor is actually
+// running. Good enough for "is the 5V rail roughly where I'd expect,"
+// not a real current measurement - there's no direct 5V-side current
+// sense on this board.
+constexpr uint32_t V_IN_NOMINAL_MV = 12000;
+
+uint16_t estimateI5vMilliamps() {
+  const uint32_t iInMa = readIMonMilliamps();
+  const uint32_t v5vMv = read5vRailMillivolts();
+  if (v5vMv == 0) return 0;
+  return (uint16_t)((V_IN_NOMINAL_MV * iInMa) / v5vMv);
 }
 
 void setRelay(bool engaged) {
@@ -1305,6 +1411,8 @@ void printStatus() {
   Serial1.print(readIMonRaw());
   Serial1.print(F(" iMonMa="));
   Serial1.print(readIMonMilliamps());
+  Serial1.print(F(" i5vEstMa="));
+  Serial1.print(estimateI5vMilliamps());
   Serial1.print(F(" angle="));
   Serial1.print(readAngleDeg(), 2);
   Serial1.print(F(" target="));
@@ -1324,9 +1432,20 @@ void printHelp() {
   Serial1.println(F("  LED ON / LED OFF  external LED (A3/PC3) on/off"));
   Serial1.println(F("  RELAY ON / OFF  force the RS485 bus-connect relay, bench-only override -"));
   Serial1.println(F("                  bypasses the 5V-stable gate from setup(), does not touch it"));
-  Serial1.println(F("  IMON            print PIN_I_MON raw ADC + mA (TPS26600 IMON, 200mA @ 4.07V design point)"));
-  Serial1.println(F("  5VSTATUS        print PIN_5V_READY raw ADC reading (internal 1.1V ref) +"));
-  Serial1.println(F("                  current relay state - ~816/1023 expected at healthy 5V"));
+  Serial1.println(F("  IMON            print PIN_I_MON raw ADC + calibrated mA (TPS26600 IMON)"));
+  Serial1.println(F("  5VSTATUS        print PIN_5V_READY raw ADC (internal 1.1V ref) + calibrated"));
+  Serial1.println(F("                  mV + estimated i5v (see I5V) + current relay state"));
+  Serial1.println(F("  I5V             print estimated 5V-rail current (mA) from a 12V-nominal"));
+  Serial1.println(F("                  power balance against IMON - rough, debug only, reads high"));
+  Serial1.println(F("                  whenever the motor is running (see estimateI5vMilliamps())"));
+  Serial1.println(F("  CALI <mA>       calibrate IMON: capture the current PIN_I_MON raw ADC"));
+  Serial1.println(F("                  reading against a real load current measured with a bench"));
+  Serial1.println(F("                  ammeter right now (e.g. CALI 87.5), persisted in EEPROM"));
+  Serial1.println(F("  CALV <V>        calibrate 5V_READY the same way, against a bench multimeter"));
+  Serial1.println(F("                  reading of the actual 5V rail right now (e.g. CALV 5.02)"));
+  Serial1.println(F("  CALSTATUS       print the stored IMON/5V_READY calibration points"));
+  Serial1.println(F("  CALRESET        reset IMON/5V_READY calibration to the factory-calculated"));
+  Serial1.println(F("                  defaults (undoes CALI/CALV)"));
   Serial1.println(F("  INVERTA ON/OFF  flip motor A direction (mirrors CMD_SET_INVERT_DIR)"));
   Serial1.println(F("  INVERTB ON/OFF  flip motor B direction (mirrors CMD_SET_INVERT_DIR)"));
   Serial1.println(F("  IDENTIFY [n]    blink status LED white n times (default 3), mirrors"));
@@ -1383,8 +1502,51 @@ void handleDebugLine(String line) {
   if (upper == "5VSTATUS") {
     Serial1.print(F("5V_READY raw (internal 1.1V ref)="));
     Serial1.print(readAdcInternalRef(PIN_5V_READY));
+    Serial1.print(F(" mV=")); Serial1.print(read5vRailMillivolts());
+    Serial1.print(F(" i5vEstMa=")); Serial1.print(estimateI5vMilliamps());
     Serial1.print(F(" relay="));
     Serial1.println(relayEngaged ? F("CONNECTED") : F("disconnected"));
+    return;
+  }
+  if (upper == "I5V") {
+    Serial1.print(F("i5vEst=")); Serial1.print(estimateI5vMilliamps());
+    Serial1.println(F("mA (rough power-balance estimate, see HELP)"));
+    return;
+  }
+  if (upper.startsWith("CALI ")) {
+    const float ma = upper.substring(5).toFloat();
+    if (ma <= 0) { Serial1.println(F("Refused: CALI needs a positive measured mA (e.g. CALI 87.5).")); return; }
+    analogCal.imonCalRaw = readIMonRaw();
+    analogCal.imonCalMa = (uint16_t)(ma + 0.5f);
+    if (analogCal.imonCalRaw == 0) { Serial1.println(F("Refused: PIN_I_MON reads 0 raw right now, can't calibrate against it.")); return; }
+    saveAnalogCal();
+    Serial1.print(F("IMON calibrated: raw=")); Serial1.print(analogCal.imonCalRaw);
+    Serial1.print(F(" = ")); Serial1.print(analogCal.imonCalMa); Serial1.println(F("mA"));
+    return;
+  }
+  if (upper.startsWith("CALV ")) {
+    const float v = upper.substring(5).toFloat();
+    if (v <= 0) { Serial1.println(F("Refused: CALV needs a positive measured volts value (e.g. CALV 5.02).")); return; }
+    const uint16_t raw = readAdcInternalRef(PIN_5V_READY);
+    if (raw == 0) { Serial1.println(F("Refused: PIN_5V_READY reads 0 raw right now, can't calibrate against it.")); return; }
+    analogCal.v5vCalRaw = raw;
+    analogCal.v5vCalMv = (uint16_t)(v * 1000.0f + 0.5f);
+    saveAnalogCal();
+    Serial1.print(F("5V_READY calibrated: raw=")); Serial1.print(analogCal.v5vCalRaw);
+    Serial1.print(F(" = ")); Serial1.print(analogCal.v5vCalMv); Serial1.println(F("mV"));
+    return;
+  }
+  if (upper == "CALSTATUS") {
+    Serial1.print(F("IMON: raw=")); Serial1.print(analogCal.imonCalRaw);
+    Serial1.print(F(" = ")); Serial1.print(analogCal.imonCalMa); Serial1.println(F("mA"));
+    Serial1.print(F("5V_READY: raw=")); Serial1.print(analogCal.v5vCalRaw);
+    Serial1.print(F(" = ")); Serial1.print(analogCal.v5vCalMv); Serial1.println(F("mV"));
+    return;
+  }
+  if (upper == "CALRESET") {
+    resetAnalogCalToFactoryDefaults();
+    saveAnalogCal();
+    Serial1.println(F("IMON/5V_READY calibration reset to factory-calculated defaults."));
     return;
   }
   if (upper == "INVERTA ON") { invertMotorA = true; Serial1.println(F("Motor A direction inverted.")); return; }
@@ -1555,6 +1717,7 @@ void setup() {
   seedSessionNonce();
   loadConfig(); // busAddress always starts ADDR_UNASSIGNED - re-earned via CMD_DISCOVER each boot
   loadHwInfo(); // tape width etc - set once at assembly, never reset by config changes
+  loadAnalogCal(); // IMON/5V_READY hand-calibration point, if CALI/CALV have ever been run
   loadFactorySerial(); // AT24CS02 identification page - read fresh every boot, never cached to EEPROM
 
   Serial1.println(F("beta1 feeder firmware ready"));

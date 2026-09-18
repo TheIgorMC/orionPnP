@@ -13,7 +13,7 @@ RS485 wire protocol spec (opcodes, error codes): **`PROTOCOL.md`**.
 
 | Command | Does |
 |---|---|
-| `STATUS` / `WHOAMI` | addr, component, tapeZero, pitch, angle/target, magnet health, i2cErrors (+ `invertA`/`invertB`/`tapeWidthMm`/`lastMoveErr` on alpha02+, `serial=` on alpha03+, `relay=`/`iMonRaw=` on beta1, or `[RS485ECHO ON]` banner on alpha01 if active) |
+| `STATUS` / `WHOAMI` | addr, component, tapeZero, pitch, angle/target, magnet health, i2cErrors (+ `invertA`/`invertB`/`tapeWidthMm`/`lastMoveErr` on alpha02+, `serial=` on alpha03+, `relay=`/`iMonRaw=`/`iMonMa=`/`i5vEstMa=` on beta1, or `[RS485ECHO ON]` banner on alpha01 if active) |
 | `HELP` / `?` | print this command list |
 | `SIMADDR <n>` | force bus address `n` (1–247) locally, bench-only, skips `CMD_DISCOVER`/`CMD_ASSIGN_ADDR` |
 | `LED ON` / `LED OFF` | standard external LED, plain on/off. alpha01/02: D13/PB5 (shares ISP header's SCK line). alpha03+: A3/PC3 (own pin) |
@@ -21,8 +21,13 @@ RS485 wire protocol spec (opcodes, error codes): **`PROTOCOL.md`**.
 | `SETWIDTH <mm>` | **alpha02+** — set this unit's tape width (8/12/16/24/32/44/56), assembly/bench-time, mirrors `CMD_SET_HW_INFO` (alpha02: ATmega EEPROM; alpha03+: AT24CS02) |
 | `SERIAL` | **alpha03+** — print the AT24CS02's factory-programmed 128-bit serial number as hex, mirrors `CMD_GET_SERIAL` |
 | `RELAY ON` / `OFF` | **beta1 only** — force the RS485 bus-connect relay, bench-only override, bypasses the 5V-stable gate |
-| `IMON` | **beta1 only** — print `PIN_I_MON` raw ADC + mA (TPS26600 IMON, 12V rail current sense) |
-| `5VSTATUS` | **beta1 only** — print `PIN_5V_READY` raw ADC (internal 1.1V ref) + current relay state |
+| `IMON` | **beta1 only** — print `PIN_I_MON` raw ADC + calibrated mA (TPS26600 IMON, 12V rail current sense) |
+| `5VSTATUS` | **beta1 only** — print `PIN_5V_READY` raw ADC (internal 1.1V ref) + calibrated mV + estimated `i5vEstMa` + current relay state |
+| `I5V` | **beta1 only** — print estimated 5V-rail current (mA), rough 12V-nominal power-balance estimate from IMON, debug only |
+| `CALI <mA>` | **beta1 only** — calibrate IMON: capture current `PIN_I_MON` raw ADC against a real bench-ammeter mA reading, persisted |
+| `CALV <V>` | **beta1 only** — calibrate 5V_READY: capture current `PIN_5V_READY` raw ADC against a real bench-multimeter volts reading, persisted |
+| `CALSTATUS` | **beta1 only** — print the stored IMON/5V_READY calibration points |
+| `CALRESET` | **beta1 only** — reset IMON/5V_READY calibration to the factory-calculated defaults |
 
 ## Motion (raw angle/tooth)
 
@@ -151,3 +156,14 @@ RELAY ON       (bypass the 5V-stable gate to test the bus manually)
 Normal boot waits for `PIN_5V_READY` to read stable for 500ms before
 engaging the relay on its own — see `PROTOCOL.md` "Power sequencing" for
 the reference gotcha this reading works around.
+
+**Hand-calibrate IMON/5V_READY on a bench jig (beta1 only):**
+```
+CALI 87.5      (with a real ammeter reading 87.5mA on the 12V input right now)
+CALV 5.02      (with a real multimeter reading 5.02V on the 5V rail right now)
+CALSTATUS      (confirm the stored points)
+```
+Each command captures the live raw ADC reading against the value you
+measured and persists it — future `IMON`/`5VSTATUS`/`STATUS` reads convert
+through that point instead of the factory-calculated default. `CALRESET`
+undoes both.

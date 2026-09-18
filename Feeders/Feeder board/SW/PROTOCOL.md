@@ -169,10 +169,12 @@ expect this hardware, ahead of the schematic actually adding it.
   current, linear through the origin: ~4.07V at the 200mA design max
   load. Read with the default AVCC reference. `iMonRaw` (raw ADC) goes
   out over `CMD_STATUS_INFO`; firmware also exposes a converted
-  `readIMonMilliamps()` (used by the `IMON`/`STATUS` debug commands) built
-  from that same 4.07V/200mA calibration point. `EN`/`FLT#` are not wired
-  to the MCU — the MCU only runs once the eFuse is already on, so there's
-  no fault state where firmware could still be reading a pin to report it.
+  `readIMonMilliamps()` (used by the `IMON`/`STATUS` debug commands),
+  scaled through a hand-calibratable `AnalogCalibration` point (falls back
+  to the 4.07V/200mA factory-calculated default until calibrated) — see
+  "Hand calibration" below. `EN`/`FLT#` are not wired to the MCU — the MCU
+  only runs once the eFuse is already on, so there's no fault state where
+  firmware could still be reading a pin to report it.
 - **`PIN_5V_READY` (A7/PE3) + `PIN_485_RELAY` (D13/PB5)** — a 4.7k
   (rail)/1k (GND) divider on the 5V rail gates a MOSFET-driven relay that physically
   connects/disconnects this feeder's RS485 lines from the shared bus.
@@ -194,7 +196,23 @@ expect this hardware, ahead of the schematic actually adding it.
   ~6.27V, comfortably clear of a 5V rail's normal tolerance, while using
   ~80% of the ADC's range — roughly 2x the resolution of a 10k/1k
   alternative. See `beta1/project.md`, "5V rail reading: a reference
-  gotcha," for the full comparison.
+  gotcha," for the full comparison. `read5vRailMillivolts()` converts the
+  raw reading to mV the same hand-calibratable way as IMON above, and
+  `estimateI5vMilliamps()` derives a rough 5V-rail current estimate from
+  IMON + a 12V-nominal power balance — debug convenience only, not a real
+  measurement (see "Hand calibration" below and the function's comment for
+  what it ignores).
+
+**Hand calibration:** IMON and 5V_READY are both stored as a single
+`(raw ADC, real-world value)` point (`AnalogCalibration`, in the ATmega's
+internal EEPROM, independent of `FeederConfig`/`FeederHardwareInfo` — a
+component change or `RESETCFG` never touches it), assumed linear through
+the origin. Debug-port-only (bench/jig use, like `RELAY`/`IMON`/`5VSTATUS`
+— no bus opcodes, since there'd be no bus link to reach a feeder that
+still needs calibrating): `CALI <mA>` captures the current `PIN_I_MON` raw
+reading against a real ammeter reading right now; `CALV <V>` does the same
+for `PIN_5V_READY` against a real multimeter reading; `CALSTATUS` prints
+both stored points; `CALRESET` reverts to the factory-calculated defaults.
 
 ## Motor direction default (beta1 only)
 
