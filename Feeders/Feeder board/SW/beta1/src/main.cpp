@@ -1045,14 +1045,15 @@ uint16_t read5vRailMillivolts() {
 // Rough debug-only estimate of the 5V rail's load current, from a simple
 // power balance: assumes the 12V input rail is at its nominal value and
 // that ALL of the measured 12V-side input current (IMON) is being
-// converted down to the 5V rail. Two things this ignores, both of which
-// make this an OVER-estimate in practice: conversion losses (~100%
-// efficiency assumed), and any load that draws straight off 12V without
-// going through the 5V regulator at all - this board's motor driver does
-// exactly that, so i5vEst reads high whenever a motor is actually
-// running. Good enough for "is the 5V rail roughly where I'd expect,"
-// not a real current measurement - there's no direct 5V-side current
-// sense on this board.
+// converted down to the 5V rail. That's actually the right assumption
+// here - the DRV8833's VMOT is tied to the 5V rail (through a ferrite
+// bead for noise isolation), not 12V, so the motor is itself a 5V-rail
+// load, not something bypassing the regulator. The only thing this
+// ignores is conversion (buck) efficiency - real efficiency is under
+// 100%, so the true i5v is somewhat LOWER than this estimate, not
+// higher. Good enough for "is the 5V rail roughly where I'd expect," not
+// a real current measurement - there's no direct 5V-side current sense
+// on this board.
 constexpr uint32_t V_IN_NOMINAL_MV = 12000;
 
 uint16_t estimateI5vMilliamps() {
@@ -1436,8 +1437,8 @@ void printHelp() {
   Serial1.println(F("  5VSTATUS        print PIN_5V_READY raw ADC (internal 1.1V ref) + calibrated"));
   Serial1.println(F("                  mV + estimated i5v (see I5V) + current relay state"));
   Serial1.println(F("  I5V             print estimated 5V-rail current (mA) from a 12V-nominal"));
-  Serial1.println(F("                  power balance against IMON - rough, debug only, reads high"));
-  Serial1.println(F("                  whenever the motor is running (see estimateI5vMilliamps())"));
+  Serial1.println(F("                  power balance against IMON - rough, debug only, ignores"));
+  Serial1.println(F("                  buck efficiency (see estimateI5vMilliamps())"));
   Serial1.println(F("  CALI <mA>       calibrate IMON: capture the current PIN_I_MON raw ADC"));
   Serial1.println(F("                  reading against a real load current measured with a bench"));
   Serial1.println(F("                  ammeter right now (e.g. CALI 87.5), persisted in EEPROM"));

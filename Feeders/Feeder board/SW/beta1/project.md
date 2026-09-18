@@ -120,13 +120,15 @@ forever.
 There's no direct current sense on the 5V rail — only IMON on the 12V
 input side. `estimateI5vMilliamps()` gives a rough stand-in from a simple
 power balance: `i5vEst = (12V_nominal * iMonMa) / v5vActualMv`, i.e.
-"assume the whole 12V input current is being converted down to 5V." Two
-things this ignores, both pushing the estimate high: conversion losses
-(assumes ~100% efficiency), and any load that draws straight off 12V
-without going through the 5V regulator at all — this board's motor driver
-does exactly that, so `i5vEstMa` reads well above the true 5V-rail current
-whenever a motor is actually running. Good enough as a "does this look
-roughly sane" bench check (`I5V` debug command, `i5vEstMa` in
+"assume the whole 12V input current is being converted down to 5V." That
+assumption actually holds well here: the DRV8833's `VMOT` is tied to the
+5V rail (through a ferrite bead for noise isolation), not 12V, so the
+motor is itself a 5V-rail load rather than something bypassing the
+regulator — there's no significant 12V-only load on this board to throw
+the balance off. The one thing the estimate does ignore is buck
+conversion efficiency (assumes ~100%), so the true 5V-rail current is
+somewhat *lower* than `i5vEstMa`, not higher. Good enough as a "does this
+look roughly sane" bench check (`I5V` debug command, `i5vEstMa` in
 `STATUS`/`5VSTATUS`), not a real measurement — if that's ever needed,
 it'd want its own current-sense hardware on the 5V rail.
 
