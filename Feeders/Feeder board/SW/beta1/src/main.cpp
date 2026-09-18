@@ -9,9 +9,14 @@
   beta1 - forked from alpha03 (PIN_EXT_LED move + AT24CS02), with the
   actual beta1 schematic additions:
 
-  1. PIN_I_MON (A6/PE2) - analog, a voltage proportional to 12V rail
-     current draw. Read with the default AVCC reference; see the "Power
-     sequencing" section below.
+  1. PIN_I_MON (A6/PE2) - analog, the IMON output of a TPS26600 eFuse on
+     the 12V rail (RIMON=309k, 1%), a voltage proportional to load
+     current: ~4.07V at the 200mA design max load, linear through the
+     origin. Read with the default AVCC reference; see the "Power
+     sequencing" section below and readIMonMilliamps(). TPS26600's EN/
+     FLT# pins are NOT wired to the MCU - it can't be, since the MCU only
+     runs once the eFuse is already on, so there's no fault state where
+     firmware could still be reading a pin to report it.
   2. PIN_5V_READY (A7/PE3) - analog, 5V rail via an external 4.7k/1k
      divider (4.7k to the rail, 1k to GND - picked over 10k/1k for ~2x
      the ADC resolution, see pins_config.h). Read against the ATmega's
@@ -935,6 +940,22 @@ uint16_t readIMonRaw() {
   return analogRead(PIN_I_MON); // default AVCC reference - independent current-sense signal, not the rail itself
 }
 
+// TPS26600 IMON scaling, from the TI eFuse calculator at RIMON_sel=309k(1%):
+// VMON=4.07V at the 200mA design max load current, linear through the
+// origin (standard current-mirror IMON output). ADC read against the
+// default ~5.0V AVCC reference, so raw counts scale the same way. No EN/
+// FLT# pins from the TPS26600 are wired to the MCU - it can't be, since
+// the MCU only runs once the eFuse is already on, so there's no fault
+// state where firmware could still be reading a pin to report it.
+constexpr uint16_t IMON_VMON_MAX_MV = 4070; // mV at PIN_I_MON at the design max load current
+constexpr uint16_t IMON_MAX_DESIGN_MA = 200; // load current that produces IMON_VMON_MAX_MV
+constexpr uint16_t IMON_ADC_REF_MV = 5000; // nominal AVCC used as the default ADC reference
+
+uint16_t readIMonMilliamps() {
+  const uint32_t raw = readIMonRaw();
+  return (uint16_t)((raw * IMON_ADC_REF_MV * IMON_MAX_DESIGN_MA) / ((uint32_t)IMON_VMON_MAX_MV * 1023));
+}
+
 void setRelay(bool engaged) {
   digitalWrite(PIN_485_RELAY, engaged == RELAY_ACTIVE_HIGH ? HIGH : LOW);
   relayEngaged = engaged;
@@ -1282,6 +1303,8 @@ void printStatus() {
   Serial1.print(relayEngaged ? F("CONNECTED") : F("disconnected"));
   Serial1.print(F(" iMonRaw="));
   Serial1.print(readIMonRaw());
+  Serial1.print(F(" iMonMa="));
+  Serial1.print(readIMonMilliamps());
   Serial1.print(F(" angle="));
   Serial1.print(readAngleDeg(), 2);
   Serial1.print(F(" target="));
@@ -1301,7 +1324,7 @@ void printHelp() {
   Serial1.println(F("  LED ON / LED OFF  external LED (A3/PC3) on/off"));
   Serial1.println(F("  RELAY ON / OFF  force the RS485 bus-connect relay, bench-only override -"));
   Serial1.println(F("                  bypasses the 5V-stable gate from setup(), does not touch it"));
-  Serial1.println(F("  IMON            print PIN_I_MON raw ADC reading (12V rail current sense)"));
+  Serial1.println(F("  IMON            print PIN_I_MON raw ADC + mA (TPS26600 IMON, 200mA @ 4.07V design point)"));
   Serial1.println(F("  5VSTATUS        print PIN_5V_READY raw ADC reading (internal 1.1V ref) +"));
   Serial1.println(F("                  current relay state - ~816/1023 expected at healthy 5V"));
   Serial1.println(F("  INVERTA ON/OFF  flip motor A direction (mirrors CMD_SET_INVERT_DIR)"));
@@ -1353,7 +1376,8 @@ void handleDebugLine(String line) {
   if (upper == "RELAY ON") { setRelay(true); Serial1.println(F("RS485 relay forced CONNECTED (bench override).")); return; }
   if (upper == "RELAY OFF") { setRelay(false); Serial1.println(F("RS485 relay forced disconnected (bench override).")); return; }
   if (upper == "IMON") {
-    Serial1.print(F("I_MON raw=")); Serial1.println(readIMonRaw());
+    Serial1.print(F("I_MON raw=")); Serial1.print(readIMonRaw());
+    Serial1.print(F(" mA=")); Serial1.println(readIMonMilliamps());
     return;
   }
   if (upper == "5VSTATUS") {

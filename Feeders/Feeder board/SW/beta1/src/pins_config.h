@@ -139,7 +139,14 @@ constexpr uint8_t PIN_EXT_LED = A3; // PC3 - standard LED, simple on/off, not th
 // pins_arduino.h directly). If it turns out to number them differently,
 // only these two constants need to change.
 // ---------------------------------------------------------------
-constexpr uint8_t PIN_I_MON = A6; // PE2/ADC6 - analog, voltage proportional to 12V rail current draw
+// TPS26600 eFuse IMON output (RIMON=309k, 1%) - voltage proportional to
+// 12V rail load current, linear through the origin: ~4.07V at the 200mA
+// design max load. Read against the default AVCC reference (unlike
+// PIN_5V_READY below) - see readIMonMilliamps() in main.cpp for the
+// counts-to-mA conversion. EN/FLT# are not wired to the MCU: the MCU only
+// runs once the eFuse is already on, so there's no fault state where
+// firmware could still be reading a pin to report it.
+constexpr uint8_t PIN_I_MON = A6; // PE2/ADC6 - analog, TPS26600 IMON (12V rail current sense)
 
 // 4.7k (rail side) / 1k (GND side) resistor divider off the 5V rail ->
 // nominally ~0.88V at the pin when the rail is healthy (~816/1023 against

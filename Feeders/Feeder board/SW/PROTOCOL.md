@@ -164,11 +164,15 @@ board.
 Not present on any board built so far — beta1 is the first firmware to
 expect this hardware, ahead of the schematic actually adding it.
 
-- **`PIN_I_MON` (A6/PE2)** — analog, voltage proportional to 12V rail
-  current draw, read with the default AVCC reference. Exposed raw
-  (`iMonRaw` in `CMD_STATUS_INFO`, `IMON` debug command) — no amps
-  conversion yet, needs the current-sense IC's gain/shunt spec once that
-  part is chosen.
+- **`PIN_I_MON` (A6/PE2)** — analog, the IMON output of a TPS26600 eFuse
+  on the 12V rail (RIMON=309kΩ, 1%), voltage proportional to load
+  current, linear through the origin: ~4.07V at the 200mA design max
+  load. Read with the default AVCC reference. `iMonRaw` (raw ADC) goes
+  out over `CMD_STATUS_INFO`; firmware also exposes a converted
+  `readIMonMilliamps()` (used by the `IMON`/`STATUS` debug commands) built
+  from that same 4.07V/200mA calibration point. `EN`/`FLT#` are not wired
+  to the MCU — the MCU only runs once the eFuse is already on, so there's
+  no fault state where firmware could still be reading a pin to report it.
 - **`PIN_5V_READY` (A7/PE3) + `PIN_485_RELAY` (D13/PB5)** — a 4.7k
   (rail)/1k (GND) divider on the 5V rail gates a MOSFET-driven relay that physically
   connects/disconnects this feeder's RS485 lines from the shared bus.

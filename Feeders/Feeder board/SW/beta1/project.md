@@ -9,11 +9,17 @@ outputs. None of this is on any board built so far.
 
 ## What's different from alpha03
 
-1. **`PIN_I_MON` (A6/PE2)** — analog, voltage proportional to 12V rail
-   current draw. Just exposed (`readIMonRaw()`, `IMON` debug command,
-   included in `CMD_STATUS_INFO`) — converting the raw ADC reading to
-   actual amps needs the current-sense IC's gain/shunt spec, not yet
-   wired in since that depends on which part gets used.
+1. **`PIN_I_MON` (A6/PE2)** — analog, the IMON output of a TPS26600 eFuse
+   on the 12V rail (RIMON=309kΩ, 1%, per TI's calculator), voltage
+   proportional to load current: ~4.07V at the 200mA design max load,
+   linear through the origin. `readIMonRaw()` (raw ADC) and
+   `readIMonMilliamps()` (converted, using the 4.07V/200mA calibration
+   point) are both exposed — `IMON` debug command, `iMonMa`/`iMonRaw` in
+   `STATUS`, `iMonRaw` still what goes out over `CMD_STATUS_INFO` (mA
+   conversion is done on the receiving end from that same raw value).
+   TPS26600's `EN`/`FLT#` pins are not wired to the MCU — can't be, since
+   the MCU only runs once the eFuse is already on, so there's no fault
+   state where firmware could still be alive to report it.
 2. **`PIN_5V_READY` (A7/PE3) + `PIN_485_RELAY` (D13/PB5)** — a power-up
    sequencing feature: the 5V rail is monitored via a 4.7k/1k divider until
    it reads stable for `RELAY_READY_STABLE_MS` (500ms), and only then is
@@ -442,12 +448,10 @@ hardware) — see the `TODO` comment at its definition.
   this environment to check. If MiniCore numbers the extra PORTE pins
   differently, only `PIN_I_MON`/`PIN_5V_READY` in `pins_config.h` need to
   change.
-- **`PIN_485_RELAY` polarity** (`RELAY_ACTIVE_HIGH = true`) is a guess at
-  a low-side-switch MOSFET topology (GPIO → gate, source → GND, coil
-  between drain and supply) — confirm against the actual beta1 schematic
-  once it exists; flip the constant if wrong.
-- **`readIMonRaw()` has no amps conversion yet** — needs the current-sense
-  IC's gain/shunt value once that part is chosen.
+- **`PIN_485_RELAY` polarity** (`RELAY_ACTIVE_HIGH = true`) — confirmed:
+  a low-side NMOS with a pull-down (GPIO → gate, source → GND, coil
+  between drain and supply), so HIGH = on = relay energized matches the
+  actual board.
 - **5V-rail stability check resolution** — see "5V rail reading: a
   reference gotcha" above; the 4.7k/1k divider gives ~2x the resolution of
   a 10k/1k alternative and doesn't clip until well above 5V, but it's

@@ -21,7 +21,7 @@ RS485 wire protocol spec (opcodes, error codes): **`PROTOCOL.md`**.
 | `SETWIDTH <mm>` | **alpha02+** — set this unit's tape width (8/12/16/24/32/44/56), assembly/bench-time, mirrors `CMD_SET_HW_INFO` (alpha02: ATmega EEPROM; alpha03+: AT24CS02) |
 | `SERIAL` | **alpha03+** — print the AT24CS02's factory-programmed 128-bit serial number as hex, mirrors `CMD_GET_SERIAL` |
 | `RELAY ON` / `OFF` | **beta1 only** — force the RS485 bus-connect relay, bench-only override, bypasses the 5V-stable gate |
-| `IMON` | **beta1 only** — print `PIN_I_MON` raw ADC (12V rail current sense, no amps conversion yet) |
+| `IMON` | **beta1 only** — print `PIN_I_MON` raw ADC + mA (TPS26600 IMON, 12V rail current sense) |
 | `5VSTATUS` | **beta1 only** — print `PIN_5V_READY` raw ADC (internal 1.1V ref) + current relay state |
 
 ## Motion (raw angle/tooth)
