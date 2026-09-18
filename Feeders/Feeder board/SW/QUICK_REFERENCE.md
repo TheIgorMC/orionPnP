@@ -1,4 +1,4 @@
-# Feeder Firmware Quick Reference (alpha01 / alpha02 / alpha03)
+# Feeder Firmware Quick Reference (alpha01 / alpha02 / alpha03 / beta1)
 
 Debug port: **Serial1**, 9600 baud, newline-terminated, via the ISP header
 (D11/D12 — shares that header with ISP flashing, mutually exclusive at any
@@ -6,20 +6,23 @@ given instant). Not case-sensitive. `HELP`/`?` prints this list live from
 whichever firmware is actually flashed.
 
 Full design rationale for any of this: `alpha01/project.md` /
-`alpha02/project.md` / `alpha03/project.md`. Full RS485 wire protocol spec
-(opcodes, error codes): **`PROTOCOL.md`**.
+`alpha02/project.md` / `alpha03/project.md` / `beta1/project.md`. Full
+RS485 wire protocol spec (opcodes, error codes): **`PROTOCOL.md`**.
 
 ## Bring-up / status
 
 | Command | Does |
 |---|---|
-| `STATUS` / `WHOAMI` | addr, component, tapeZero, pitch, angle/target, magnet health, i2cErrors (+ `invertA`/`invertB`/`tapeWidthMm`/`lastMoveErr` on alpha02+, `serial=` on alpha03, or `[RS485ECHO ON]` banner on alpha01 if active) |
+| `STATUS` / `WHOAMI` | addr, component, tapeZero, pitch, angle/target, magnet health, i2cErrors (+ `invertA`/`invertB`/`tapeWidthMm`/`lastMoveErr` on alpha02+, `serial=` on alpha03+, `relay=`/`iMonRaw=` on beta1, or `[RS485ECHO ON]` banner on alpha01 if active) |
 | `HELP` / `?` | print this command list |
 | `SIMADDR <n>` | force bus address `n` (1–247) locally, bench-only, skips `CMD_DISCOVER`/`CMD_ASSIGN_ADDR` |
-| `LED ON` / `LED OFF` | standard external LED, plain on/off. alpha01/02: D13/PB5 (shares ISP header's SCK line). alpha03: A3/PC3 (own pin) |
+| `LED ON` / `LED OFF` | standard external LED, plain on/off. alpha01/02: D13/PB5 (shares ISP header's SCK line). alpha03+: A3/PC3 (own pin) |
 | `IDENTIFY [n]` | **alpha02+** — blink status LED white `n` times (default 3), mirrors `CMD_IDENTIFY` |
-| `SETWIDTH <mm>` | **alpha02+** — set this unit's tape width (8/12/16/24/32/44/56), assembly/bench-time, mirrors `CMD_SET_HW_INFO` (alpha02: ATmega EEPROM; alpha03: AT24CS02) |
-| `SERIAL` | **alpha03 only** — print the AT24CS02's factory-programmed 128-bit serial number as hex, mirrors `CMD_GET_SERIAL` |
+| `SETWIDTH <mm>` | **alpha02+** — set this unit's tape width (8/12/16/24/32/44/56), assembly/bench-time, mirrors `CMD_SET_HW_INFO` (alpha02: ATmega EEPROM; alpha03+: AT24CS02) |
+| `SERIAL` | **alpha03+** — print the AT24CS02's factory-programmed 128-bit serial number as hex, mirrors `CMD_GET_SERIAL` |
+| `RELAY ON` / `OFF` | **beta1 only** — force the RS485 bus-connect relay, bench-only override, bypasses the 5V-stable gate |
+| `IMON` | **beta1 only** — print `PIN_I_MON` raw ADC (12V rail current sense, no amps conversion yet) |
+| `5VSTATUS` | **beta1 only** — print `PIN_5V_READY` raw ADC (internal 1.1V ref) + current relay state |
 
 ## Motion (raw angle/tooth)
 
@@ -60,21 +63,25 @@ Full design rationale for any of this: `alpha01/project.md` /
 | `INVERTA ON` / `OFF` | **alpha02+** | flip motor A direction (RAM-only, resets on reboot) |
 | `INVERTB ON` / `OFF` | **alpha02+** | flip motor B direction (RAM-only, resets on reboot) |
 
-`alpha02`/`alpha03`'s SW1 does a real closed-loop +1 tooth jog (needs a
-magnet mounted); SW2 always jogs motor B open-loop on all three firmwares
-(no encoder on that motor). `alpha01`'s SW1/SW2 jog motor A/B open-loop
-for bring-up without a magnet.
+`alpha02`/`alpha03`/`beta1`'s SW1 does a real closed-loop +1 tooth jog
+(needs a magnet mounted); SW2 always jogs motor B open-loop on every
+firmware (no encoder on that motor). `alpha01`'s SW1/SW2 jog motor A/B
+open-loop for bring-up without a magnet. On `beta1`, motor A's direction
+defaults *inverted* (`invertMotorA = true`) — the final board's DRV8833
+OUT1/OUT2 are swapped relative to the bench units this was tuned on.
 
 ---
 
 ## RS485 bus commands (not Modbus — see `PROTOCOL.md` for full detail)
 
 Frame: `[0xAA][ADDR][CMD][LEN][PAYLOAD...][CRC8]`. `ADDR`: `0x00` broadcast
-(also "still unassigned"), `1`–`247` unicast. Commands below are alpha03's
-full set; alpha02 has everything except `CMD_GET_SERIAL` (and its hw-info
-commands read/write the ATmega's internal EEPROM, not an AT24CS02); alpha01
-implements everything up to `CMD_SET_EXT_LED` (no `CMD_SET_INVERT_DIR` or
-anything after it) plus its own debug-only `RS485ECHO` transport test mode.
+(also "still unassigned"), `1`–`247` unicast. Commands below are beta1's
+full set; alpha03 has everything except `CMD_STATUS_INFO`'s last 3 payload
+bytes (`iMonRaw`/`relayEngaged` - no I_MON or relay on alpha03); alpha02
+additionally lacks `CMD_GET_SERIAL` (and its hw-info commands read/write
+the ATmega's internal EEPROM, not an AT24CS02); alpha01 implements
+everything up to `CMD_SET_EXT_LED` (no `CMD_SET_INVERT_DIR` or anything
+after it) plus its own debug-only `RS485ECHO` transport test mode.
 
 | Command | Code | Payload → | Reply |
 |---|---|---|---|
@@ -92,10 +99,10 @@ anything after it) plus its own debug-only `RS485ECHO` transport test mode.
 | `CMD_SET_INVERT_DIR` | `0x28` | **alpha02+** — `[motor(0=A,1=B), state(0/1)]` | `CMD_ACK`/`CMD_NACK` |
 | `CMD_GET_HW_INFO` | `0x29` | **alpha02+** — — | `CMD_HW_INFO` (`0xA1`): `[tapeWidthMm]` |
 | `CMD_SET_HW_INFO` | `0x2A` | **alpha02+** — `[tapeWidthMm]` | `CMD_ACK`/`CMD_NACK` |
-| `CMD_GET_STATUS` | `0x30` | **alpha02+** — — | `CMD_STATUS_INFO` (`0xA2`): `[angleRawHi,angleRawLo,as5600Status,faultActive,lastMoveErr]` |
+| `CMD_GET_STATUS` | `0x30` | **alpha02+** — — | `CMD_STATUS_INFO` (`0xA2`): `[angleRawHi,angleRawLo,as5600Status,faultActive,lastMoveErr]` + **beta1 only**: `,iMonRawHi,iMonRawLo,relayEngaged` |
 | `CMD_STOP` | `0x31` | **alpha02+** — — | `CMD_ACK` |
 | `CMD_IDENTIFY` | `0x32` | **alpha02+** — `[blinkCount]` (0⇒3) | `CMD_ACK` (after blinking) |
-| `CMD_GET_SERIAL` | `0x33` | **alpha03 only** — — | `CMD_SERIAL_INFO` (`0xA3`): 16 bytes, or `CMD_NACK` if the AT24CS02 didn't respond |
+| `CMD_GET_SERIAL` | `0x33` | **alpha03+** — — | `CMD_SERIAL_INFO` (`0xA3`): 16 bytes, or `CMD_NACK` if the AT24CS02 didn't respond |
 
 `CMD_ACK` = `0x82`, `CMD_NACK` = `0x83`. Error codes (in `CMD_NACK`
 payloads and `CMD_STATUS_INFO`'s `lastMoveErr`): `0x00` none, `0x01` fault,
@@ -129,9 +136,18 @@ CMD_IDENTIFY -> feeder blinks its status LED white 3x
 ```
 or `IDENTIFY` on its own debug port for the same effect locally.
 
-**Read a feeder's factory serial number (alpha03 only):**
+**Read a feeder's factory serial number (alpha03+):**
 ```
 SERIAL
 ```
 or `CMD_GET_SERIAL` over the bus. Needs an AT24CS02 actually populated —
 not present on any V0.2a board built so far, only on beta1 hardware.
+
+**Check power-up sequencing on the bench before the divider/relay exist (beta1 only):**
+```
+RELAY ON       (bypass the 5V-stable gate to test the bus manually)
+5VSTATUS       (see the raw internal-1.1V-ref reading and current relay state)
+```
+Normal boot waits for `PIN_5V_READY` to read stable for 500ms before
+engaging the relay on its own — see `PROTOCOL.md` "Power sequencing" for
+the reference gotcha this reading works around.

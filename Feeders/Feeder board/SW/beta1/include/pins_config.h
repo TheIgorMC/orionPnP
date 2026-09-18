@@ -1,0 +1,166 @@
+#pragma once
+
+/*
+  beta1 pin map (ATmega328PB-AU) - base is the real Feeder board schematic
+  SCH_Feeder_V02.pdf (V0.2a/V0.2b), inherited from alpha01-03, PLUS the
+  beta1 schematic additions below (I_MON, 485_RELAY, 5V_READY) and the
+  ext LED move (already anticipated in alpha03, see PIN_EXT_LED). None of
+  the beta1-only pins have been on real hardware yet - this firmware is
+  written for a schematic revision that doesn't exist as a built board
+  yet, same situation alpha03 was in for the ext LED move and the
+  AT24CS02.
+
+  Otherwise, pins are taken directly from the actual board net names, so
+  this file should track the schematic 1:1 - if a revision moves a signal,
+  update it here first.
+
+  Pin numbers are Arduino-style digital/analog numbers as exposed by
+  MiniCore's ATmega328PB variant (classic Uno-compatible numbering:
+  D0-D13, A0-A5, plus A6/A7 for the 328PB's extra PE2/PE3 pins - see
+  PIN_I_MON/PIN_5V_READY below for why these two specifically are used).
+  SDA/SCL/USART0/USART1 are fixed in silicon and not reassignable -
+  listed below for reference only.
+*/
+
+#include <Arduino.h>
+
+// ---------------------------------------------------------------
+// RS485 bus - hardware USART0, fixed pins, not reassignable:
+//   RO (transceiver -> MCU RX) -> D0 (RXD0)
+//   DI (MCU TX -> transceiver) -> D1 (TXD0)
+// This is the live feeder bus. Nothing should ever Serial.print() to it -
+// use Serial1 (below) for debug/local output instead.
+// ---------------------------------------------------------------
+constexpr uint8_t PIN_RS485_RE = 2; // combined RE#/DE direction control (MAX1487): HIGH = transmit, LOW = receive
+
+// ---------------------------------------------------------------
+// Local debug/programming UART - hardware USART1, fixed pins, shared with
+// the ISP programming header (MOSI0/TXD1 and MISO0/RXD1 are the same
+// silicon pins - see Feeder-Design wiki page, "Programming Header"):
+//   TX1 -> D11 (MOSI0/TXD1)
+//   RX1 -> D12 (MISO0/RXD1)
+// Use Serial1 for all human-readable output. Only reachable through the
+// programming header, and mutually exclusive with ISP flashing on that
+// same header at any given instant.
+// ---------------------------------------------------------------
+
+// ---------------------------------------------------------------
+// DRV8833 channel A -> sprocket wheel motor (the only motor ever driven)
+//
+// MCU-side AIN1/AIN2 pins are unchanged from alpha01-03 - "OUT1 and OUT2
+// swapped in the final revision" is on the DRV8833's motor-output side
+// (AOUT1/AOUT2, i.e. which physical motor lead each one drives), not the
+// MCU-to-driver input side, so there's no AIN pin to reassign here. Net
+// effect on firmware is the same either way: motor A's effective
+// direction is now inverted relative to the bench units this logic was
+// tuned against. Handled by defaulting invertMotorA = true for beta1
+// (see the runtime-direction section below) rather than by touching pin
+// numbers - if OUT1/OUT2 actually meant something MCU-side instead, this
+// is the wrong fix and these two constants should swap instead; flag it
+// if so.
+// ---------------------------------------------------------------
+constexpr uint8_t PIN_AIN1 = 9;  // PWM (Timer1/OC1A), forward duty
+constexpr uint8_t PIN_AIN2 = 10; // PWM (Timer1/OC1B), reverse duty
+
+// ---------------------------------------------------------------
+// DRV8833 channel B -> NOT USED. Wired for board compatibility only,
+// held braked once in setup() and never touched again.
+// ---------------------------------------------------------------
+constexpr uint8_t PIN_BIN1 = 5;
+constexpr uint8_t PIN_BIN2 = 6;
+
+// ---------------------------------------------------------------
+// DRV8833 control/status pins
+// ---------------------------------------------------------------
+constexpr uint8_t PIN_nSLEEP = 4; // set HIGH to enable driver
+constexpr uint8_t PIN_nFAULT = 8; // input, active LOW (DRV_FLT net, PB0)
+
+// ---------------------------------------------------------------
+// I2C bus (hardware TWI0, fixed pins, not reassignable):
+//   SDA -> A4
+//   SCL -> A5
+// Shared by two devices, distinguished by I2C address (no new pins
+// needed for the second one):
+//   - AS5600 magnetic encoder (0x36)
+//   - AT24CS02 EEPROM + factory serial number (0x50 EEPROM page,
+//     0x58 read-only identification page) - see AT24CS02 section in
+//     main.cpp. Not present on any V0.2a board built so far; alpha03
+//     is the first firmware to expect it, ahead of the beta1 schematic
+//     actually adding it. I2C reads degrade gracefully (same
+//     checked-endTransmission/requestFrom pattern as the AS5600 code)
+//     if it isn't actually populated.
+// ---------------------------------------------------------------
+
+// ---------------------------------------------------------------
+// User switches (SW1/SW2 on the board; SW3 is a physical RESET button,
+// wired straight to the MCU RESET pin, not GPIO)
+// ---------------------------------------------------------------
+constexpr uint8_t PIN_SW1 = A0;
+constexpr uint8_t PIN_SW2 = A1;
+
+// ---------------------------------------------------------------
+// Status indicators
+// ---------------------------------------------------------------
+constexpr uint8_t PIN_RGB_DATA = 3; // single SK6812 LED, WS2812-compatible timing - live magnet-detect status
+constexpr uint8_t PIN_FAULT_LED = 7; // separate simple board-fault LED, not part of the RGB chain
+
+// SCHEMATIC DEVIATION from V0.2a/V0.2b, pending the beta1 revision: the
+// old PIN_EXT_LED (D13/PB5, a plain digital LED) shared the ISP header's
+// SCK line - mutually exclusive with ISP flashing at any given instant.
+// Moved to its own pin, A3/PC3, which is unused/unpopulated on every
+// V0.2a board built so far (it carried the old optical-interrupter
+// signals before the AS5600 switch - see Feeder-Design wiki page) and
+// isn't shared with anything else. No V0.2a board has this LED actually
+// wired up yet; this pin assignment is what beta1's schematic should
+// route it to.
+//
+// Standard red LED + series resistor sized for ~20mA, direct GPIO drive -
+// no transistor needed. 20mA is comfortably inside the ATmega328PB's
+// 40mA absolute-maximum DC current per I/O pin (Microchip datasheet,
+// "Absolute Maximum Ratings"), and is the conventional design point for
+// driving an LED straight off an AVR pin (same current class as, e.g.,
+// the Arduino Uno's own onboard LED) - not something that needed a
+// dedicated addressable LED or an external switch to handle safely.
+constexpr uint8_t PIN_EXT_LED = A3; // PC3 - standard LED, simple on/off, not the ISP header
+
+// ---------------------------------------------------------------
+// Power sequencing / rail monitoring - new in beta1, not on any V0.2a
+// board built so far.
+//
+// PIN_I_MON and PIN_5V_READY land on A6/A7 - the ATmega328PB's two extra
+// ADC-capable pins (PE2/ADC6 and PE3/ADC7) that don't exist on the
+// classic 328P. Both are spare/unpopulated on the current V0.2a schematic
+// (present on the MCU symbol with no net attached) so this isn't a new
+// deviation the way PIN_EXT_LED's move was - beta1 is the first revision
+// to actually wire them. NOTE: confirm A6/A7 is how MiniCore's
+// ATmega328PB variant actually exposes PE2/PE3 once the toolchain is
+// available to check (not verified against the installed board package
+// in this environment - no internet/package cache here to inspect
+// pins_arduino.h directly). If it turns out to number them differently,
+// only these two constants need to change.
+// ---------------------------------------------------------------
+constexpr uint8_t PIN_I_MON = A6; // PE2/ADC6 - analog, voltage proportional to 12V rail current draw
+
+// 1k/1k resistor divider off the 5V rail -> nominally 2.5V at the pin
+// when the rail is healthy. See main.cpp's power-up sequencing section
+// for why this MUST be read against the ATmega's internal 1.1V bandgap
+// reference, not the default AVCC/VCC reference - using AVCC would be
+// measuring the divided 5V rail against a reference that IS the same 5V
+// rail, which reads the same fixed ratio regardless of the rail's actual
+// absolute value and so cannot detect "still ramping up" at all.
+constexpr uint8_t PIN_5V_READY = A7; // PE3/ADC7 - analog, 5V rail via 1k/1k divider
+
+// Digital output -> small N-channel MOSFET gate -> relay coil that
+// physically connects/disconnects this feeder's RS485 A/B lines to the
+// shared rail. HIGH = MOSFET on = relay energized = bus connected
+// (assumes a low-side switch: GPIO -> gate, MOSFET source -> GND, relay
+// coil between the MOSFET drain and the coil supply rail - flip
+// RELAY_ACTIVE_HIGH in main.cpp if the actual board inverts this).
+// Reuses D13/PB5, freed up by PIN_EXT_LED's move off the ISP header's SCK
+// line in alpha03. Sharing that pin with ISP flashing again is an
+// acceptable tradeoff here (unlike for the LED): the relay is meant to be
+// de-energized/bus-disconnected by default at reset and during
+// programming anyway - see main.cpp for the power-up sequencing this
+// gates (does not engage until PIN_5V_READY has read stable for
+// RELAY_READY_STABLE_MS).
+constexpr uint8_t PIN_485_RELAY = 13; // PB5 - RS485 bus-connect relay coil (via MOSFET)

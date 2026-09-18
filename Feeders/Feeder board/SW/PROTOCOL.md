@@ -1,16 +1,19 @@
-# Feeder RS485 Protocol (alpha03) — current state
+# Feeder RS485 Protocol (beta1) — current state
 
 This is the canonical spec for the frame protocol implemented in
-`alpha03/src/main.cpp` (the beta1 codebase), kept separate from
-`alpha01`/`alpha02`/`alpha03`'s `project.md` files so it doesn't drift out
-of sync across three copies. Still **not Modbus** — see
-`alpha01/project.md`'s Modbus feasibility section for why that's still an
-open decision; this is what's actually implemented today.
+`beta1/src/main.cpp`, kept separate from `alpha01`/`alpha02`/`alpha03`/
+`beta1`'s `project.md` files so it doesn't drift out of sync across four
+copies. Still **not Modbus** — see `alpha01/project.md`'s Modbus
+feasibility section for why that's still an open decision; this is what's
+actually implemented today.
 
-- `alpha02` implements everything here up to and including `CMD_IDENTIFY`
-  — i.e. everything except `CMD_GET_SERIAL`, and its `CMD_DISCOVER_HERE`/
-  `CMD_GET_HW_INFO`/`CMD_SET_HW_INFO` read/write `FeederHardwareInfo` from
-  the ATmega's internal EEPROM, not an AT24CS02 (alpha02 doesn't have one).
+- `alpha03` implements everything here except `CMD_STATUS_INFO`'s last
+  three payload bytes (`iMonRaw`/`relayEngaged` - alpha03 has no I_MON or
+  relay), and `invertMotorA` defaults to `false` there instead of `true`.
+- `alpha02` additionally lacks `CMD_GET_SERIAL`, and its
+  `CMD_DISCOVER_HERE`/`CMD_GET_HW_INFO`/`CMD_SET_HW_INFO` read/write
+  `FeederHardwareInfo` from the ATmega's internal EEPROM, not an AT24CS02
+  (alpha02 doesn't have one).
 - `alpha01` implements a smaller subset still (everything up to and
   including `CMD_SET_EXT_LED`, no hardware info/status/stop/identify/
   serial) plus its own `RS485ECHO` debug-only test mode.
@@ -84,10 +87,10 @@ see **Error codes** below; otherwise empty).
 | `CMD_SET_INVERT_DIR` | `0x28` | `[motor(0=A,1=B), state(0/1)]` | `CMD_ACK`/`CMD_NACK` | RAM-only, resets on reboot |
 | `CMD_GET_HW_INFO` | `0x29` | — | `CMD_HW_INFO` (`0xA1`): `[tapeWidthMm]` | `0xFF` = unset |
 | `CMD_SET_HW_INFO` | `0x2A` | `[tapeWidthMm]` | `CMD_ACK`/`CMD_NACK` | assembly/bench-time only, validated against EIA-481 widths, no reset command |
-| `CMD_GET_STATUS` | `0x30` | — | `CMD_STATUS_INFO` (`0xA2`): `[angleRawHi,angleRawLo,as5600Status,faultActive,lastMoveErr]` | live telemetry |
+| `CMD_GET_STATUS` | `0x30` | — | `CMD_STATUS_INFO` (`0xA2`): `[angleRawHi,angleRawLo,as5600Status,faultActive,lastMoveErr,iMonRawHi,iMonRawLo,relayEngaged]` | live telemetry; last 3 bytes **beta1 only** (alpha02/03 send the first 5) |
 | `CMD_STOP` | `0x31` | — | `CMD_ACK` | immediate brake, both motors |
 | `CMD_IDENTIFY` | `0x32` | `[blinkCount]` (0 ⇒ default 3) | `CMD_ACK` (after blinking) | white LED flashes, distinct from the magnet-status green/red |
-| `CMD_GET_SERIAL` | `0x33` | **alpha03 only** — — | `CMD_SERIAL_INFO` (`0xA3`): 16 bytes | AT24CS02 factory-programmed 128-bit serial number; `CMD_NACK` if the chip didn't respond |
+| `CMD_GET_SERIAL` | `0x33` | **alpha03+** — — | `CMD_SERIAL_INFO` (`0xA3`): 16 bytes | AT24CS02 factory-programmed 128-bit serial number; `CMD_NACK` if the chip didn't respond |
 
 ## Error codes
 
@@ -155,6 +158,46 @@ validated against real AT24CS02 silicon** — the address assumptions,
 the identification-page layout, and the fixed 5ms write-cycle delay (no
 ack-polling implemented) are all from the datasheet, not from a working
 board.
+
+## Power sequencing (beta1 only)
+
+Not present on any board built so far — beta1 is the first firmware to
+expect this hardware, ahead of the schematic actually adding it.
+
+- **`PIN_I_MON` (A6/PE2)** — analog, voltage proportional to 12V rail
+  current draw, read with the default AVCC reference. Exposed raw
+  (`iMonRaw` in `CMD_STATUS_INFO`, `IMON` debug command) — no amps
+  conversion yet, needs the current-sense IC's gain/shunt spec once that
+  part is chosen.
+- **`PIN_5V_READY` (A7/PE3) + `PIN_485_RELAY` (D13/PB5)** — a 1k/1k
+  divider on the 5V rail gates a MOSFET-driven relay that physically
+  connects/disconnects this feeder's RS485 lines from the shared bus.
+  The relay stays disconnected at reset and only engages once the rail
+  has read stable for 500ms (`RELAY_READY_STABLE_MS`), so a feeder that's
+  still mid-power-up can't disturb a bus already in use. `relayEngaged`
+  is reported in `CMD_STATUS_INFO`; there's no bus command to force it
+  (deliberate — if the relay's open, a bus command couldn't reach the
+  feeder to force it anyway; use the `RELAY ON`/`OFF` debug-port override
+  for bench testing instead).
+
+  **Reference gotcha:** `PIN_5V_READY` is read against the ATmega's
+  internal 1.1V bandgap reference, not the default AVCC — the divider
+  taps the same 5V rail that AVCC normally *is*, so an AVCC-referenced
+  read would report a fixed ratio regardless of the rail's actual value
+  and could never detect "still ramping." The internal reference fixes
+  detection but clips at max once the rail crosses ~2.2V (the divider's
+  2.5V nominal exceeds the reference's 1.1V full-scale), so this can only
+  confirm "risen past ~2.2V and stopped moving," not distinguish a
+  healthy 5V from a sagging-but-stopped ~3V. See `beta1/project.md` for
+  the fix if finer resolution ever matters (a different divider ratio).
+
+## Motor direction default (beta1 only)
+
+`invertMotorA` defaults to `true` in beta1 (`false` in alpha02/03) — the
+final board's DRV8833 OUT1/OUT2 (motor-output side) are swapped relative
+to the bench units this control loop was originally tuned against. Still
+runtime-overridable (`INVERTA`, `CMD_SET_INVERT_DIR`) if this turns out to
+be the wrong fix once real hardware exists — see `beta1/project.md`.
 
 ## Not yet in this protocol
 
