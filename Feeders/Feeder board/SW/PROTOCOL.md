@@ -169,8 +169,8 @@ expect this hardware, ahead of the schematic actually adding it.
   (`iMonRaw` in `CMD_STATUS_INFO`, `IMON` debug command) — no amps
   conversion yet, needs the current-sense IC's gain/shunt spec once that
   part is chosen.
-- **`PIN_5V_READY` (A7/PE3) + `PIN_485_RELAY` (D13/PB5)** — a 1k/1k
-  divider on the 5V rail gates a MOSFET-driven relay that physically
+- **`PIN_5V_READY` (A7/PE3) + `PIN_485_RELAY` (D13/PB5)** — a 4.7k
+  (rail)/1k (GND) divider on the 5V rail gates a MOSFET-driven relay that physically
   connects/disconnects this feeder's RS485 lines from the shared bus.
   The relay stays disconnected at reset and only engages once the rail
   has read stable for 500ms (`RELAY_READY_STABLE_MS`), so a feeder that's
@@ -185,11 +185,12 @@ expect this hardware, ahead of the schematic actually adding it.
   taps the same 5V rail that AVCC normally *is*, so an AVCC-referenced
   read would report a fixed ratio regardless of the rail's actual value
   and could never detect "still ramping." The internal reference fixes
-  detection but clips at max once the rail crosses ~2.2V (the divider's
-  2.5V nominal exceeds the reference's 1.1V full-scale), so this can only
-  confirm "risen past ~2.2V and stopped moving," not distinguish a
-  healthy 5V from a sagging-but-stopped ~3V. See `beta1/project.md` for
-  the fix if finer resolution ever matters (a different divider ratio).
+  detection; the 4.7k/1k ratio (~0.88V, ~816/1023 counts against the 1.1V
+  reference at a healthy 5V rail) was chosen so it only clips above
+  ~6.27V, comfortably clear of a 5V rail's normal tolerance, while using
+  ~80% of the ADC's range — roughly 2x the resolution of a 10k/1k
+  alternative. See `beta1/project.md`, "5V rail reading: a reference
+  gotcha," for the full comparison.
 
 ## Motor direction default (beta1 only)
 

@@ -15,7 +15,7 @@ outputs. None of this is on any board built so far.
    actual amps needs the current-sense IC's gain/shunt spec, not yet
    wired in since that depends on which part gets used.
 2. **`PIN_5V_READY` (A7/PE3) + `PIN_485_RELAY` (D13/PB5)** — a power-up
-   sequencing feature: the 5V rail is monitored via a 1k/1k divider until
+   sequencing feature: the 5V rail is monitored via a 4.7k/1k divider until
    it reads stable for `RELAY_READY_STABLE_MS` (500ms), and only then is
    `PIN_485_RELAY` engaged, physically connecting this feeder's RS485
    lines to the shared bus. Point is to stop a feeder that's still
@@ -49,17 +49,26 @@ to the ATmega's internal 1.1V bandgap reference just for this read
 (`readAdcInternalRef()`), which decouples the measurement from the rail
 being measured.
 
-That fix has its own tradeoff: the 1k/1k divider gives ~2.5V at the pin
-when the rail is healthy, but the internal reference is only 1.1V
-full-scale, so the reading clips to max once the rail crosses roughly
-2.2V — well short of the full 5V. In practice this means the stability
-check can only detect "risen past ~2.2V and stopped moving," not
-distinguish a healthy 5V from a sagging-but-stopped ~3V. Acceptable as a
-coarse ramp/bounce detector for now; if finer resolution turns out to
-matter, the real fix is a bigger divider ratio (e.g. ~10k/2.7k, landing
-near 1.05V at nominal 5V) so the signal uses the internal reference's
-full range instead of clipping into it — a hardware change, not
-something firmware can compensate for with this exact divider.
+The divider ratio matters against that 1.1V full-scale: a 1k/1k divider
+(the original spec) gives ~2.5V at the pin when the rail is healthy,
+which clips the reading to max once the rail crosses roughly 2.2V — well
+short of 5V, and unable to distinguish a healthy 5V from a sagging-but-
+stopped ~3V. Weighed two fixes:
+
+- **10k (rail) / 1k (GND):** ~0.45V at 5V nominal, ~422/1023 — safe up to
+  a ~12.1V rail before clipping, but only uses ~41% of the ADC's range.
+- **4.7k (rail) / 1k (GND) — what's used:** ~0.88V at 5V nominal,
+  ~816/1023 — clips only above ~6.27V rail, comfortably clear of a 5V
+  rail's normal tolerance, while using ~80% of the ADC's range: roughly
+  2x the resolution of the 10k/1k option. There's no realistic scenario
+  on a "5V" rail that needs headroom all the way to 12V, so the extra
+  resolution is worth taking.
+
+No firmware logic needed to change for this — `waitFor5vStableAndEngageRelay()`'s
+stability check compares consecutive raw ADC readings to each other (a
+plateau detector), not against a hardcoded voltage, so it works with
+whatever ratio is populated as long as it doesn't clip too early. Only
+the comments/constants describing the expected reading needed updating.
 
 ---
 
@@ -440,9 +449,11 @@ hardware) — see the `TODO` comment at its definition.
 - **`readIMonRaw()` has no amps conversion yet** — needs the current-sense
   IC's gain/shunt value once that part is chosen.
 - **5V-rail stability check resolution** — see "5V rail reading: a
-  reference gotcha" above; works as a coarse detector with the specified
-  1k/1k divider, but can't distinguish healthy-5V from sagging-but-stopped
-  ~3V. Revisit the divider ratio if that distinction ever matters.
+  reference gotcha" above; the 4.7k/1k divider gives ~2x the resolution of
+  a 10k/1k alternative and doesn't clip until well above 5V, but it's
+  still a plateau detector, not an absolute-voltage comparator — a rail
+  that stalls partway up would still read as "stable" at whatever level
+  it stalled at.
 - **`RELAY_READY_TIMEOUT_MS` (5s) behavior on timeout** — firmware
   continues booting normally with the relay left disconnected and logs a
   warning, rather than retrying or halting. Reasonable default for now;

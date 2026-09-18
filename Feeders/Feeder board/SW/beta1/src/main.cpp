@@ -12,11 +12,11 @@
   1. PIN_I_MON (A6/PE2) - analog, a voltage proportional to 12V rail
      current draw. Read with the default AVCC reference; see the "Power
      sequencing" section below.
-  2. PIN_5V_READY (A7/PE3) - analog, 5V rail via an external 1k/1k
-     divider. Read against the ATmega's INTERNAL 1.1V reference, not the
-     default - see "Power sequencing" for why the default reference
-     cannot work for this specific signal, and the resolution limitation
-     that divider ratio has against that reference.
+  2. PIN_5V_READY (A7/PE3) - analog, 5V rail via an external 4.7k/1k
+     divider (4.7k to the rail, 1k to GND - picked over 10k/1k for ~2x
+     the ADC resolution, see pins_config.h). Read against the ATmega's
+     INTERNAL 1.1V reference, not the default - see "Power sequencing"
+     for why the default reference cannot work for this specific signal.
   3. PIN_485_RELAY (D13/PB5, reusing the pin PIN_EXT_LED vacated) - a
      MOSFET-driven relay coil that physically connects/disconnects this
      feeder's RS485 lines from the shared bus. Held disconnected until
@@ -896,24 +896,20 @@ void setExtLed(bool on) {
 // feeders/the host are already using.
 //
 // PIN_5V_READY MUST be read against the internal 1.1V bandgap reference,
-// not the default AVCC reference - the 1k/1k divider taps the same 5V
-// rail that (by default) IS the ADC's own reference on this board, so an
-// AVCC-referenced read of that divider reports the same ~50% ratio
+// not the default AVCC reference - the divider taps the same 5V rail
+// that (by default) IS the ADC's own reference on this board, so an
+// AVCC-referenced read of that divider reports the same fixed ratio
 // throughout the whole power-up ramp (numerator and reference shrink
 // together) and could never detect "still ramping" - it would look
 // "stable" from the very first sample.
 //
-// KNOWN LIMITATION: 1k/1k gives ~2.5V at the pin at the healthy 5V
-// nominal, but the internal reference is only 1.1V full-scale, so the
-// reading clips to max (1023) once the rail crosses roughly 2.2V - well
-// before reaching 5V. This can only detect "rail has risen past ~2.2V and
-// stopped moving," not distinguish a healthy 5V from a sagging-but-
-// stopped ~3V. Good enough as a coarse ramp/bounce detector; if finer
-// resolution ever matters, the fix is a bigger divider ratio (e.g.
-// ~10k/2.7k, landing near 1.05V at nominal 5V so the signal uses the
-// internal reference's full range instead of clipping into it) - a
-// hardware change, not something firmware can work around with this
-// exact divider.
+// The 4.7k/1k divider (see pins_config.h) gives ~0.88V at the pin at the
+// healthy 5V nominal - ~80% of the 1.1V reference's full scale, clipping
+// only above ~6.27V rail. That's comfortably clear of a 5V rail's normal
+// tolerance, so unlike an under-sized divider this one does NOT clip
+// during normal operation - the stability check below is comparing real,
+// non-clipped ADC deltas across the whole ramp, not just detecting "past
+// some early threshold and stuck."
 // ---------------------------
 constexpr unsigned long RELAY_READY_STABLE_MS = 500;
 constexpr unsigned long RELAY_READY_TIMEOUT_MS = 5000; // give up and move on (relay stays OFF) rather than hang forever
@@ -1307,8 +1303,7 @@ void printHelp() {
   Serial1.println(F("                  bypasses the 5V-stable gate from setup(), does not touch it"));
   Serial1.println(F("  IMON            print PIN_I_MON raw ADC reading (12V rail current sense)"));
   Serial1.println(F("  5VSTATUS        print PIN_5V_READY raw ADC reading (internal 1.1V ref) +"));
-  Serial1.println(F("                  current relay state - see pins_config.h for the reading's"));
-  Serial1.println(F("                  known resolution limitation above ~2.2V rail"));
+  Serial1.println(F("                  current relay state - ~816/1023 expected at healthy 5V"));
   Serial1.println(F("  INVERTA ON/OFF  flip motor A direction (mirrors CMD_SET_INVERT_DIR)"));
   Serial1.println(F("  INVERTB ON/OFF  flip motor B direction (mirrors CMD_SET_INVERT_DIR)"));
   Serial1.println(F("  IDENTIFY [n]    blink status LED white n times (default 3), mirrors"));

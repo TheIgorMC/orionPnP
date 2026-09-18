@@ -141,14 +141,20 @@ constexpr uint8_t PIN_EXT_LED = A3; // PC3 - standard LED, simple on/off, not th
 // ---------------------------------------------------------------
 constexpr uint8_t PIN_I_MON = A6; // PE2/ADC6 - analog, voltage proportional to 12V rail current draw
 
-// 1k/1k resistor divider off the 5V rail -> nominally 2.5V at the pin
-// when the rail is healthy. See main.cpp's power-up sequencing section
-// for why this MUST be read against the ATmega's internal 1.1V bandgap
-// reference, not the default AVCC/VCC reference - using AVCC would be
-// measuring the divided 5V rail against a reference that IS the same 5V
-// rail, which reads the same fixed ratio regardless of the rail's actual
-// absolute value and so cannot detect "still ramping up" at all.
-constexpr uint8_t PIN_5V_READY = A7; // PE3/ADC7 - analog, 5V rail via 1k/1k divider
+// 4.7k (rail side) / 1k (GND side) resistor divider off the 5V rail ->
+// nominally ~0.88V at the pin when the rail is healthy (~816/1023 against
+// the 1.1V reference below - 80% of full scale, clips only above ~6.27V
+// rail, comfortably clear of a 5V rail's normal tolerance). Picked over a
+// 10k/1k divider (~0.45V, ~422/1023, clips above ~12.1V) for roughly 2x
+// the resolution - there's no realistic scenario on a "5V" rail that
+// needs headroom all the way to 12V. See main.cpp's power-up sequencing
+// section for why this MUST be read against the ATmega's internal 1.1V
+// bandgap reference, not the default AVCC/VCC reference - using AVCC
+// would be measuring the divided 5V rail against a reference that IS the
+// same 5V rail, which reads the same fixed ratio regardless of the
+// rail's actual absolute value and so cannot detect "still ramping up"
+// at all.
+constexpr uint8_t PIN_5V_READY = A7; // PE3/ADC7 - analog, 5V rail via 4.7k/1k divider
 
 // Digital output -> small N-channel MOSFET gate -> relay coil that
 // physically connects/disconnects this feeder's RS485 A/B lines to the
