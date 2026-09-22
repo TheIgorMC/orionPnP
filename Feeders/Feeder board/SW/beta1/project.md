@@ -191,6 +191,18 @@ picture:
 `homingDone` latches true (at most once per boot). It's called right after
 the `PIN_nFAULT` check clears, so a fault condition also holds off homing.
 
+### Debug self-test: relay + ext LED
+
+`runDebugSelfTest()`, called from `setup()` right before
+`waitFor5vStableAndEngageRelay()`, exercises beta1's two new GPIO-driven
+bits of hardware with a visual RGB cue each — a bench aid so toggling
+`PIN_485_RELAY`/`PIN_EXT_LED` can be confirmed by eye, no meter needed:
+relay ON (RGB green) → relay OFF (RGB red) → ext LED ON (RGB blue) → ext
+LED OFF. Always leaves both off when it returns — a throwaway bench
+toggle, not the real power-sequencing relay engage, which happens right
+after via `waitFor5vStableAndEngageRelay()` and starts from that same
+known-off state either way. Runs unconditionally every boot for now.
+
 ---
 
 # Inherited from alpha03: PIN_EXT_LED move, AT24CS02

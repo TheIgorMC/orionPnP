@@ -1148,6 +1148,43 @@ void showStartupLedSequence() {
   statusLed.show();
 }
 
+// ---------------------------
+// Debug self-test: relay + ext LED - beta1 only, bench bring-up aid.
+// Exercises the two new GPIO-driven bits of beta1 hardware
+// (PIN_485_RELAY, PIN_EXT_LED) with a visual RGB cue each, so a bench
+// tester can confirm both actually toggle without reaching for a meter.
+//
+// Runs unconditionally every boot, called from setup() right before
+// waitFor5vStableAndEngageRelay() - this is a throwaway bench toggle,
+// NOT the real power-sequencing relay engage (that's
+// waitFor5vStableAndEngageRelay() itself, right after). Always leaves
+// the relay OFF and the ext LED off when it returns, so the real gate
+// starts from a known, disconnected state either way.
+// ---------------------------
+void runDebugSelfTest() {
+  Serial1.println(F("Self-test: relay ON"));
+  setRelay(true);
+  setStatusLedColor(0, 255, 0); // green = relay ON
+  delay(300);
+
+  Serial1.println(F("Self-test: relay OFF"));
+  setRelay(false);
+  setStatusLedColor(255, 0, 0); // red = relay OFF
+  delay(300);
+
+  Serial1.println(F("Self-test: ext LED ON"));
+  setExtLed(true);
+  setStatusLedColor(0, 0, 255); // blue = testing ext LED
+  delay(300);
+  setExtLed(false);
+  Serial1.println(F("Self-test: ext LED OFF"));
+
+  statusLed.clear();
+  statusLed.show();
+  // loop() repaints the RGB to the real magnet-detect red/green on its
+  // very next iteration - no need to set that here.
+}
+
 // CMD_IDENTIFY / debug IDENTIFY: white flashes, distinct from the
 // magnet-detect green/red loop() shows normally - so an operator managing
 // several feeders on a live rail can pick the right physical unit for a
@@ -1802,6 +1839,7 @@ void setup() {
 
   Serial1.begin(DEBUG_BAUD);
   rs485Init();
+  runDebugSelfTest(); // beta1 bench aid - relay + ext LED toggle, RGB green/red/blue - see its own comment
   waitFor5vStableAndEngageRelay(); // blocking; see its own comment for the timeout/limitation
 
   seedSessionNonce(); // also reseeds random() - safe to draw the homing jitter right after
