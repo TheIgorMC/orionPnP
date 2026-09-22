@@ -74,6 +74,10 @@ firmware (no encoder on that motor). `alpha01`'s SW1/SW2 jog motor A/B
 open-loop for bring-up without a magnet. On `beta1`, motor A's direction
 defaults *inverted* (`invertMotorA = true`) — the final board's DRV8833
 OUT1/OUT2 are swapped relative to the bench units this was tuned on.
+Separately, `beta1`'s `pins_config.h` also swaps which DRV8833 channel
+(`PIN_AIN1`/`PIN_AIN2` vs `PIN_BIN1`/`PIN_BIN2`) each of those roles uses
+— found on the first real bench test, where commanding motor A moved the
+peel motor instead (see `PROTOCOL.md` "Motor direction default").
 
 ---
 

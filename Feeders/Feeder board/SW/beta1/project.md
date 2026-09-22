@@ -5,7 +5,9 @@ hardware revision that didn't exist yet (the ext LED move, AT24CS02).
 `beta1` continues that pattern with the actual beta1 schematic additions:
 a current-sense input, a 5V-rail-stable RS485 bus-connect relay, and a
 motor A direction default flipped for the final board's swapped DRV8833
-outputs. None of this is on any board built so far.
+outputs. Most of this hasn't been on real hardware yet, but one thing has:
+the first beta1 bench test found the two DRV8833 channels wired to the
+opposite motor connectors from what alpha01-03 assumed — see item 5 below.
 
 ## What's different from alpha03
 
@@ -39,6 +41,21 @@ outputs. None of this is on any board built so far.
    this interpretation of "OUT1/OUT2 swapped" turns out to be wrong.
 4. **Boot-time homing is deferred and gated**, not run synchronously from
    `setup()` like alpha02/03's did — see "Boot-time homing gate" below.
+5. **`PIN_AIN1`/`PIN_AIN2` swapped with `PIN_BIN1`/`PIN_BIN2`** in
+   `pins_config.h`, relative to alpha01-03. Found on the first real beta1
+   bench test: commanding "motor A" (the closed-loop feed/sprocket logic)
+   moved the peel motor instead — the two DRV8833 channels drive the
+   opposite motor connectors from what alpha01-03's pin numbers assumed.
+   Different bug from item 3's direction inversion (that's within-channel
+   polarity; this is which channel drives which motor at all) — fixed by
+   swapping the pin *numbers* in `pins_config.h`, not any logic in
+   `main.cpp`: `driveMotorA()` is still "the closed-loop feed motor,"
+   `driveMotorB()` still "the open-loop peel motor," just backed by the
+   other physical channel now. Both pin pairs use plain `analogWrite()`
+   (Timer0 for one channel, Timer1 for the other), so nothing else cares
+   which is which. Item 3's `invertMotorA = true` was only ever validated
+   against the old (wrong) channel assignment — unverified against this
+   fix, re-test direction on real hardware before trusting it.
 
 D13/PB5 (the relay pin) is the same pin `alpha03` freed up by moving
 `PIN_EXT_LED` off it. Reusing it for the relay is a deliberate, different
@@ -534,13 +551,17 @@ hardware) — see the `TODO` comment at its definition.
 
 ## Open questions (not resolved here)
 
-- **"OUT1/OUT2 swapped" interpretation** — implemented as `invertMotorA`
-  defaulting to `true` (net-effect direction inversion), on the
-  assumption this refers to the DRV8833's motor-output side. If it
-  actually meant the MCU-side `PIN_AIN1`/`PIN_AIN2` routing changed
-  instead, those two constants need to swap in `pins_config.h` and the
-  `invertMotorA` default should probably revert to `false` - confirm
-  once real beta1 hardware/schematics exist.
+- **"OUT1/OUT2 swapped" interpretation** — turned out to be two separate,
+  real issues rather than one or the other: `invertMotorA = true` (net
+  direction inversion) is still believed correct for the bench-vs-final
+  polarity difference it was meant for, AND the first real beta1 bench
+  test separately found `PIN_AIN1`/`PIN_AIN2` needed to swap with
+  `PIN_BIN1`/`PIN_BIN2` (a channel-level swap - commanding motor A was
+  moving the peel motor). The pin swap is done in `pins_config.h`, but
+  `invertMotorA`'s correctness was only ever validated against the old
+  channel assignment - **not yet re-confirmed against the pin swap on
+  real hardware.** Re-test direction next; flip `invertMotorA` to `false`
+  if it now moves the feed motor backwards.
 - **A6/A7 = PE2/PE3 not verified** against MiniCore's actual
   ATmega328PB `pins_arduino.h` — no toolchain/package cache available in
   this environment to check. If MiniCore numbers the extra PORTE pins
@@ -576,10 +597,11 @@ hardware) — see the `TODO` comment at its definition.
   exists yet to test the address assumptions (`0x50`/`0x58`), the
   identification-page read (`memAddr 0x00`, 16 bytes), or the fixed
   5ms write-cycle delay (no ack-polling implemented) against.
-- `invertMotorA`/`invertMotorB` are RAM-only (reset to `false` every
-  reboot) — once real hardware confirms whether either needs inverting,
-  decide whether that's per-unit variance (persist to EEPROM) or a fixed
-  design characteristic (hardcode as a constant, like `PICK_OFFSET_MM`).
+- `invertMotorA`/`invertMotorB` are RAM-only (reset to their compiled-in
+  defaults - `true`/`false` on beta1 - every reboot) — once real hardware
+  confirms whether either needs inverting, decide whether that's per-unit
+  variance (persist to EEPROM) or a fixed design characteristic (hardcode
+  as a constant, like `PICK_OFFSET_MM`).
 - `PICK_OFFSET_MM` is a placeholder (`0.0`) — needs measuring once with a
   camera on real hardware, per "Tape zero calibration, v2" above.
 - Modbus RTU vs. continuing/extending `OrionProtocol` — the flash/RAM/

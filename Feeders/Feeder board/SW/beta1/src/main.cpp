@@ -45,13 +45,22 @@
      true) - the final board's DRV8833 OUT1/OUT2 (motor-output side, not
      the MCU-to-driver AIN side) are swapped relative to the bench units
      this control loop was tuned against. Net effect on firmware is the
-     same as any other "wired backwards" case; see pins_config.h's AIN1/
-     AIN2 comment if this interpretation turns out to be wrong.
+     same as any other "wired backwards" case.
+  5. PIN_AIN1/PIN_AIN2 <-> PIN_BIN1/PIN_BIN2 are swapped in pins_config.h
+     relative to alpha01-03 - the first real beta1 bench test found that
+     commanding "motor A" (closed-loop feed/sprocket logic) actually
+     moved the peel motor instead, i.e. the two DRV8833 channels drive
+     the opposite motor connectors from what alpha01-03's pin numbers
+     assumed. Different bug from point 4's direction inversion - see
+     pins_config.h for the fix and why invertMotorA=true above is
+     unverified against it (validated against the old channel assignment,
+     not this one).
 
-  None of this - the new pins or the OUT1/OUT2 swap - has been on real
-  hardware yet. Same situation alpha03 was already in for its own
-  additions: this firmware is written for a schematic revision that
-  doesn't exist as a built board yet.
+  Point 5 is the first of this list to have actually been tested on real
+  beta1 hardware; the rest (new pins, the OUT1/OUT2 direction swap) are
+  still ahead of any board built so far - same situation alpha03 was
+  already in for its own additions, firmware written for a schematic
+  revision that doesn't exist as a built board yet.
 
   Also carries forward everything alpha03 added on top of alpha02: AT24CS02
   I2C EEPROM + factory serial number (FeederHardwareInfo now lives there,
@@ -136,12 +145,21 @@ const unsigned long DEBOUNCE_MS = 20;
 // out to be a fixed-per-unit characteristic worth persisting to EEPROM
 // instead.
 //
-// invertMotorA defaults to true for beta1: the final board's DRV8833
-// OUT1/OUT2 (motor-output side) are swapped relative to the bench units
-// this control loop was originally tuned/validated against, so the net
-// effective direction needs inverting by default now. Still overridable
-// at runtime if this interpretation turns out to be wrong once real
-// beta1 hardware exists.
+// invertMotorA defaults to true for beta1: the bench units this control
+// loop was originally tuned/validated against had DRV8833 OUT1/OUT2
+// (motor-output side) swapped relative to what beta1 turned out to need.
+// Still overridable at runtime (INVERTA/CMD_SET_INVERT_DIR) if this
+// turns out to be wrong.
+//
+// Separate from, and NOT a fix for, the channel-level swap the first
+// beta1 bench test actually found: commanding motor A moved the peel
+// motor instead of the feed motor. That's which DRV8833 channel drives
+// which physical motor connector - fixed in pins_config.h (PIN_AIN1/
+// PIN_AIN2 <-> PIN_BIN1/PIN_BIN2), not here. Because that fix changes
+// which physical channel "motor A" now drives, invertMotorA=true above
+// is UNVERIFIED against it - it was only ever validated against the old,
+// swapped channel assignment. Re-test direction on real hardware; don't
+// assume it's still correct.
 bool invertMotorA = true;
 bool invertMotorB = false;
 

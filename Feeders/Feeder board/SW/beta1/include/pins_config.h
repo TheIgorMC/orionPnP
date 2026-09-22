@@ -45,29 +45,32 @@ constexpr uint8_t PIN_RS485_RE = 2; // combined RE#/DE direction control (MAX148
 // ---------------------------------------------------------------
 
 // ---------------------------------------------------------------
-// DRV8833 channel A -> sprocket wheel motor (the only motor ever driven)
+// DRV8833 channel <-> motor mapping - SWAPPED from alpha01-03 on the
+// real beta1 board, confirmed by the first bench test: commanding
+// "motor A" (the closed-loop feed/sprocket motor logic in main.cpp,
+// driveMotorA()/moveToAngle() etc.) actually spun the peel motor
+// instead. That's a channel-level swap (which DRV8833 H-bridge drives
+// which physical motor connector), not the within-channel direction
+// swap invertMotorA=true was added for - the two are different bugs.
+// Fixed here rather than in main.cpp, same philosophy as invertMotorA:
+// main.cpp's "motor A" stays defined as "the closed-loop feed motor
+// with the AS5600 encoder" and "motor B" as "the open-loop peel motor,"
+// only the pin numbers backing those roles change. Both pin pairs are
+// driven with plain analogWrite() (see driveMotorA()/driveMotorB() in
+// main.cpp), so which AVR timer backs which pair doesn't matter -
+// swapping the constants is a complete, safe fix.
 //
-// MCU-side AIN1/AIN2 pins are unchanged from alpha01-03 - "OUT1 and OUT2
-// swapped in the final revision" is on the DRV8833's motor-output side
-// (AOUT1/AOUT2, i.e. which physical motor lead each one drives), not the
-// MCU-to-driver input side, so there's no AIN pin to reassign here. Net
-// effect on firmware is the same either way: motor A's effective
-// direction is now inverted relative to the bench units this logic was
-// tuned against. Handled by defaulting invertMotorA = true for beta1
-// (see the runtime-direction section below) rather than by touching pin
-// numbers - if OUT1/OUT2 actually meant something MCU-side instead, this
-// is the wrong fix and these two constants should swap instead; flag it
-// if so.
+// invertMotorA=true (below) was set based on the OLD, since-corrected
+// channel assignment - it may or may not still be the right polarity
+// now that "motor A" drives a different physical channel. NOT
+// re-verified against this fix yet; re-test direction on real hardware
+// before trusting it.
 // ---------------------------------------------------------------
-constexpr uint8_t PIN_AIN1 = 9;  // PWM (Timer1/OC1A), forward duty
-constexpr uint8_t PIN_AIN2 = 10; // PWM (Timer1/OC1B), reverse duty
+constexpr uint8_t PIN_AIN1 = 5;  // PWM (Timer0/OC0A), forward duty - closed-loop feed/sprocket motor
+constexpr uint8_t PIN_AIN2 = 6;  // PWM (Timer0/OC0B), reverse duty
 
-// ---------------------------------------------------------------
-// DRV8833 channel B -> NOT USED. Wired for board compatibility only,
-// held braked once in setup() and never touched again.
-// ---------------------------------------------------------------
-constexpr uint8_t PIN_BIN1 = 5;
-constexpr uint8_t PIN_BIN2 = 6;
+constexpr uint8_t PIN_BIN1 = 9;  // PWM (Timer1/OC1A), forward duty - open-loop peel motor, no encoder
+constexpr uint8_t PIN_BIN2 = 10; // PWM (Timer1/OC1B), reverse duty
 
 // ---------------------------------------------------------------
 // DRV8833 control/status pins

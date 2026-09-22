@@ -219,8 +219,18 @@ both stored points; `CALRESET` reverts to the factory-calculated defaults.
 `invertMotorA` defaults to `true` in beta1 (`false` in alpha02/03) — the
 final board's DRV8833 OUT1/OUT2 (motor-output side) are swapped relative
 to the bench units this control loop was originally tuned against. Still
-runtime-overridable (`INVERTA`, `CMD_SET_INVERT_DIR`) if this turns out to
-be the wrong fix once real hardware exists — see `beta1/project.md`.
+runtime-overridable (`INVERTA`, `CMD_SET_INVERT_DIR`).
+
+Separate issue, found on the first real beta1 bench test: commanding
+"motor A" moved the peel motor instead of the feed motor — the two
+DRV8833 channels drive the opposite motor connectors from what
+alpha01-03's `pins_config.h` assumed. Fixed by swapping `PIN_AIN1`/
+`PIN_AIN2` with `PIN_BIN1`/`PIN_BIN2` (which channel each firmware role
+uses), not by touching `invertMotorA` (which channel's polarity is
+inverted) — the two are independent. Because `invertMotorA = true` was
+only ever validated against the old (wrong) channel assignment, it's
+**unverified against this pin swap** — re-test direction on real
+hardware before trusting it; see `beta1/project.md`.
 
 ## Not yet in this protocol
 
