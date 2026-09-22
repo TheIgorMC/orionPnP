@@ -832,6 +832,8 @@ int stillDutyMax = DEFAULT_MIN_MOVE_DUTY - CAL_STEP_DUTY;
 
 unsigned long lastSw1EdgeMs = 0;
 unsigned long lastSw2EdgeMs = 0;
+bool sw1JogForward = true; // TEMP wiring-check jog (see loop()) - toggles each SW1 press
+bool sw2JogForward = true; // TEMP wiring-check jog (see loop()) - toggles each SW2 press
 unsigned long lastFaultLogMs = 0;
 unsigned long lastHeartbeatMs = 0;
 float lastHeartbeatAngle = 0.0f;
@@ -2007,15 +2009,31 @@ void loop() {
 
   checkHoming(); // no-op once homingDone; see its own comment for the boot-delay/stagger + magnet-stability gate
 
+  // TEMPORARY wiring-check jog (beta1 only, requested for a one-time
+  // bench check before forking to v0.01a) - both buttons drive their
+  // motor OPEN-LOOP, bypassing moveToAngle()'s magnet check entirely, so
+  // this works with no magnet mounted at all. Each press toggles that
+  // motor's direction (forward, then backward, then forward, ...) -
+  // click -> forward -> backward. SW1 = motor A, SW2 = motor B, so each
+  // button/motor pair can be wiring-checked independently. This REPLACES
+  // SW1's normal closed-loop tooth-step behavior for this check - not
+  // meant to carry forward into v0.01a, see that fork's loop() for the
+  // real button behavior.
   if (buttonPressed(PIN_SW1, lastSw1EdgeMs)) {
-    targetAngleDeg = normalizeDeg(targetAngleDeg + DEG_PER_TOOTH);
-    commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
+    Serial1.print(F("SW1: jogging motor A open-loop (no magnet check) "));
+    Serial1.println(sw1JogForward ? F("FORWARD") : F("BACKWARD"));
+    driveMotorA(JOG_DUTY, sw1JogForward);
+    delay(JOG_DURATION_MS);
+    brakeMotorA();
+    sw1JogForward = !sw1JogForward;
   }
   if (buttonPressed(PIN_SW2, lastSw2EdgeMs)) {
-    Serial1.println(F("SW2: jogging motor B (open-loop, no encoder on this motor)"));
-    driveMotorB(JOG_DUTY, true);
+    Serial1.print(F("SW2: jogging motor B open-loop "));
+    Serial1.println(sw2JogForward ? F("FORWARD") : F("BACKWARD"));
+    driveMotorB(JOG_DUTY, sw2JogForward);
     delay(JOG_DURATION_MS);
     brakeMotorB();
+    sw2JogForward = !sw2JogForward;
   }
 
   rs485Poll();
