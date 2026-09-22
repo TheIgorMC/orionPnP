@@ -607,11 +607,14 @@ hardware) — see the `TODO` comment at its definition.
   channel assignment - **not yet re-confirmed against the pin swap on
   real hardware.** Re-test direction next; flip `invertMotorA` to `false`
   if it now moves the feed motor backwards.
-- **A6/A7 = PE2/PE3 not verified** against MiniCore's actual
-  ATmega328PB `pins_arduino.h` — no toolchain/package cache available in
-  this environment to check. If MiniCore numbers the extra PORTE pins
-  differently, only `PIN_I_MON`/`PIN_5V_READY` in `pins_config.h` need to
-  change.
+- **A6/A7 = PE2/PE3 — confirmed correct**, checked directly against the
+  installed MiniCore toolchain (`~/.platformio/packages/framework-arduino-avr-minicore/variants/pb-variant/pins_arduino.h`):
+  `PIN_A7 = 26`, `PIN_PE3 = 26`, `analogPinToChannel(26) = 7` (ADC7), and
+  `INTERNAL` resolves to the 1.1V bandgap (`REFS1:REFS0=11`) for
+  `__AVR_ATmega328PB__` in `Arduino.h`. Not a guess anymore - if a "zero
+  voltage movement" symptom shows up on `PIN_5V_READY`/`PIN_I_MON`, it's
+  not this; look at wiring/population on the actual board instead (this
+  was the first board revision to route these pins at all).
 - **`PIN_485_RELAY` polarity** (`RELAY_ACTIVE_HIGH = true`) — confirmed:
   a low-side NMOS with a pull-down (GPIO → gate, source → GND, coil
   between drain and supply), so HIGH = on = relay energized matches the

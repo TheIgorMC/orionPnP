@@ -135,12 +135,11 @@ constexpr uint8_t PIN_EXT_LED = A3; // PC3 - standard LED, simple on/off, not th
 // classic 328P. Both are spare/unpopulated on the current V0.2a schematic
 // (present on the MCU symbol with no net attached) so this isn't a new
 // deviation the way PIN_EXT_LED's move was - beta1 is the first revision
-// to actually wire them. NOTE: confirm A6/A7 is how MiniCore's
-// ATmega328PB variant actually exposes PE2/PE3 once the toolchain is
-// available to check (not verified against the installed board package
-// in this environment - no internet/package cache here to inspect
-// pins_arduino.h directly). If it turns out to number them differently,
-// only these two constants need to change.
+// to actually wire them. A6/A7 = PE2/PE3 is CONFIRMED correct against
+// the actual installed MiniCore toolchain (pins_arduino.h: PIN_A7=26,
+// PIN_PE3=26, analogPinToChannel(26)=7/ADC7) - if a signal on either pin
+// reads dead, it's not this mapping; check wiring/population on the
+// board instead (this is the first revision to route these pins at all).
 // ---------------------------------------------------------------
 // TPS26600 eFuse IMON output (RIMON=309k, 1%) - voltage proportional to
 // 12V rail load current, linear through the origin: ~4.07V at the 200mA
