@@ -1237,6 +1237,50 @@ bool buttonPressed(int pin, unsigned long &lastEdgeMs) {
 }
 
 // ---------------------------
+// Relay button-test mode - beta1 only, bench bring-up aid. Hold either
+// SW1 or SW2 while powering up: RGB goes fixed blue to confirm the mode
+// was entered, then once the boot-press is released and things settle,
+// goes red with the relay forced OFF (the mode's starting state). From
+// there, pressing either button toggles the relay for as long as you
+// want to listen to it click - RGB tracks it (green = on, red = off,
+// same convention as everywhere else in this firmware).
+//
+// Simpler and more useful for confirming the click by ear than
+// runDebugSelfTest()'s fixed-timing auto-cycle - this replaces that
+// piece specifically (SELFTEST/boot still cover ext LED + IMON/5V on
+// their own). Deliberately blocks forever once entered: a dedicated
+// bench mode, not something that hands back to normal operation - power
+// cycle without holding a button to get a normal boot instead. If
+// neither button is held when this is called, returns immediately and
+// changes nothing.
+// ---------------------------
+void runRelayButtonTest() {
+  const int activeLevel = BUTTONS_ACTIVE_LOW ? LOW : HIGH;
+  if (digitalRead(PIN_SW1) != activeLevel && digitalRead(PIN_SW2) != activeLevel) return;
+
+  Serial1.println(F("Relay button-test mode: SW1/SW2 held at boot."));
+  setStatusLedColor(0, 0, 255); // blue - confirms entry
+
+  while (digitalRead(PIN_SW1) == activeLevel || digitalRead(PIN_SW2) == activeLevel) delay(10);
+  delay(200); // debounce the release before accepting the first toggle press
+
+  bool relayOn = false;
+  setRelay(relayOn);
+  setStatusLedColor(255, 0, 0); // red - relay OFF, starting state
+  Serial1.println(F("Relay OFF. Press SW1 or SW2 to toggle - power-cycle to exit."));
+
+  unsigned long lastEdge1 = 0, lastEdge2 = 0;
+  while (true) {
+    if (buttonPressed(PIN_SW1, lastEdge1) || buttonPressed(PIN_SW2, lastEdge2)) {
+      relayOn = !relayOn;
+      setRelay(relayOn);
+      setStatusLedColor(relayOn ? 0 : 255, relayOn ? 255 : 0, 0);
+      Serial1.println(relayOn ? F("Relay ON.") : F("Relay OFF."));
+    }
+  }
+}
+
+// ---------------------------
 // Closed-loop move (unchanged from TestBench04, Serial -> Serial1)
 // ---------------------------
 uint8_t moveToAngle(float target, unsigned long timeoutMs) {
@@ -1583,6 +1627,10 @@ void printHelp() {
   Serial1.println(F("                  click each way), ext LED, IMON/5V readout - CAUTION: ends"));
   Serial1.println(F("                  with the relay forced OFF, disconnecting a live bus link"));
   Serial1.println(F("                  until RELAY ON or a reboot re-engages it"));
+  Serial1.println(F("  (not a typed command) hold SW1 or SW2 while powering up for relay"));
+  Serial1.println(F("                  button-test mode: RGB blue -> red/relay off, then each"));
+  Serial1.println(F("                  button press toggles the relay (green=on/red=off) for as"));
+  Serial1.println(F("                  long as you want - power-cycle without holding to exit"));
   Serial1.println(F("  IMON            print PIN_I_MON raw ADC + calibrated mA (TPS26600 IMON)"));
   Serial1.println(F("  5VSTATUS        print PIN_5V_READY raw ADC (internal 1.1V ref) + calibrated"));
   Serial1.println(F("                  mV + estimated i5v (see I5V) + current relay state"));
@@ -1841,6 +1889,8 @@ void handleDebugLine(String line) {
 // Setup / loop
 // ---------------------------
 void setup() {
+  Serial1.begin(DEBUG_BAUD); // moved early - runRelayButtonTest() below needs it, well before the rest of setup() would otherwise get to it
+
   pinMode(PIN_SW1, INPUT_PULLUP);
   pinMode(PIN_SW2, INPUT_PULLUP);
   pinMode(PIN_AIN1, OUTPUT);
@@ -1859,6 +1909,9 @@ void setup() {
   statusLed.begin();
   statusLed.clear();
   statusLed.show();
+
+  runRelayButtonTest(); // blocks forever if SW1/SW2 held at boot - see its own comment; no-op otherwise
+
   showStartupLedSequence();
 
   brakeMotorA();
@@ -1868,7 +1921,6 @@ void setup() {
   Wire.begin();
   Wire.setClock(I2C_CLOCK_HZ);
 
-  Serial1.begin(DEBUG_BAUD);
   rs485Init();
   loadAnalogCal(); // must happen before runDebugSelfTest() - it reports calibrated IMON/5V readings, and analogCal defaults to all-zero (div-by-zero in readIMonMilliamps()/read5vRailMillivolts()) until this loads
   runDebugSelfTest(); // beta1 bench aid - relay + ext LED toggle, RGB green/red/blue, IMON/5V readout - see its own comment

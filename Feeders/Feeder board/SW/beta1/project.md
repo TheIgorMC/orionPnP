@@ -214,6 +214,28 @@ Runs once at boot unconditionally, and again on demand via the
 (ends with the relay forced off) until `RELAY ON` or a reboot
 re-engages it, same caveat `RELAY ON`/`OFF` already have.
 
+### Relay button-test mode
+
+`runDebugSelfTest()`'s relay portion is a fixed 800ms×2 auto-cycle -
+useful as a quick boot-time sanity check, but not great for actually
+standing there listening to confirm the click, since it only runs once
+and on its own schedule. `runRelayButtonTest()`, called right after
+`statusLed.begin()`/before `showStartupLedSequence()` in `setup()`,
+covers that instead: hold either `SW1` or `SW2` while powering up, and
+it takes over indefinitely rather than returning — RGB goes fixed blue
+to confirm entry, then once the boot-time button press is released and
+debounced, goes red with the relay forced off (starting state). From
+there, every `SW1`/`SW2` press toggles the relay and the RGB color
+(green=on/red=off) for as long as wanted. No exit path back to normal
+operation short of a power cycle without holding a button - this is a
+dedicated bench mode, not something meant to hand back into the boot
+sequence. If neither button is held when it's called, it returns
+immediately and changes nothing, so a normal boot is unaffected.
+
+Needed `Serial1.begin(DEBUG_BAUD)` moved to the very top of `setup()`
+(was after `Wire.begin()`) so this mode's prints work - it has to be
+checked well before setup() would otherwise reach that line.
+
 ---
 
 # Inherited from alpha03: PIN_EXT_LED move, AT24CS02
