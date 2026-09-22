@@ -191,17 +191,28 @@ picture:
 `homingDone` latches true (at most once per boot). It's called right after
 the `PIN_nFAULT` check clears, so a fault condition also holds off homing.
 
-### Debug self-test: relay + ext LED
+### Debug self-test: relay + ext LED + IMON/5V readout
 
-`runDebugSelfTest()`, called from `setup()` right before
-`waitFor5vStableAndEngageRelay()`, exercises beta1's two new GPIO-driven
-bits of hardware with a visual RGB cue each — a bench aid so toggling
-`PIN_485_RELAY`/`PIN_EXT_LED` can be confirmed by eye, no meter needed:
-relay ON (RGB green) → relay OFF (RGB red) → ext LED ON (RGB blue) → ext
-LED OFF. Always leaves both off when it returns — a throwaway bench
-toggle, not the real power-sequencing relay engage, which happens right
-after via `waitFor5vStableAndEngageRelay()` and starts from that same
-known-off state either way. Runs unconditionally every boot for now.
+`runDebugSelfTest()`, called from `setup()` right after `loadAnalogCal()`
+and right before `waitFor5vStableAndEngageRelay()`, exercises beta1's new
+GPIO-driven hardware with a visual RGB cue each — a bench aid so
+`PIN_485_RELAY`/`PIN_EXT_LED` can be confirmed by eye (and ear) without a
+meter: relay ON/OFF ×2 (RGB green/red, `SELFTEST_RELAY_HOLD_MS=800`ms
+each — the original single 300ms cycle was too quick to reliably hear
+the click over) → ext LED ON (RGB blue) → ext LED OFF → an IMON/5V
+calibration readout (raw + calibrated value for both, not a pass/fail
+check — there's no expected value without a real load/meter attached,
+just something to eyeball). `loadAnalogCal()` has to run first or the
+readout divides by zero (`analogCal` defaults to all-zero). Always leaves
+the relay and ext LED off when it returns — a throwaway bench toggle,
+not the real power-sequencing relay engage, which happens right after
+via `waitFor5vStableAndEngageRelay()` and starts from that same
+known-off state either way.
+
+Runs once at boot unconditionally, and again on demand via the
+`SELFTEST` debug command — re-running it disconnects a live bus link
+(ends with the relay forced off) until `RELAY ON` or a reboot
+re-engages it, same caveat `RELAY ON`/`OFF` already have.
 
 ---
 
@@ -589,6 +600,13 @@ hardware) — see the `TODO` comment at its definition.
   still a plateau detector, not an absolute-voltage comparator — a rail
   that stalls partway up would still read as "stable" at whatever level
   it stalled at.
+- **PCB has the `PIN_5V_READY` divider resistors backwards** (confirmed
+  on the real board) — should be 4.7k rail-side / 1k GND-side, matching
+  every default/comment in this codebase; swapping them the other way
+  (1k rail-side / 4.7k GND-side) would put ~4.1V at the pin, clipping the
+  1.1V-referenced ADC for anything above a ~1.33V rail and making the
+  stability check nearly useless. **PCB fix, not firmware** — no code
+  change needed once the resistors are corrected.
 - **`RELAY_READY_TIMEOUT_MS` (5s) behavior on timeout** — firmware
   continues booting normally with the relay left disconnected and logs a
   warning, rather than retrying or halting. Reasonable default for now;

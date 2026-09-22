@@ -21,6 +21,7 @@ RS485 wire protocol spec (opcodes, error codes): **`PROTOCOL.md`**.
 | `SETWIDTH <mm>` | **alpha02+** — set this unit's tape width (8/12/16/24/32/44/56), assembly/bench-time, mirrors `CMD_SET_HW_INFO` (alpha02: ATmega EEPROM; alpha03+: AT24CS02) |
 | `SERIAL` | **alpha03+** — print the AT24CS02's factory-programmed 128-bit serial number as hex, mirrors `CMD_GET_SERIAL` |
 | `RELAY ON` / `OFF` | **beta1 only** — force the RS485 bus-connect relay, bench-only override, bypasses the 5V-stable gate |
+| `SELFTEST` | **beta1 only** — re-run the boot self-test on demand: relay x2 (audible click each way), ext LED, IMON/5V readout. Ends with the relay forced OFF — disconnects a live bus link until `RELAY ON`/reboot |
 | `IMON` | **beta1 only** — print `PIN_I_MON` raw ADC + calibrated mA (TPS26600 IMON, 12V rail current sense) |
 | `5VSTATUS` | **beta1 only** — print `PIN_5V_READY` raw ADC (internal 1.1V ref) + calibrated mV + estimated `i5vEstMa` + current relay state |
 | `I5V` | **beta1 only** — print estimated 5V-rail current (mA), rough 12V-nominal power-balance estimate from IMON, debug only |
@@ -171,3 +172,12 @@ Each command captures the live raw ADC reading against the value you
 measured and persists it — future `IMON`/`5VSTATUS`/`STATUS` reads convert
 through that point instead of the factory-calculated default. `CALRESET`
 undoes both.
+
+**Re-run the full hardware self-test without rebooting (beta1 only):**
+```
+SELFTEST
+```
+Relay clicks on/off twice (listen for it), ext LED flashes, then prints
+the current IMON/5V readout — same sequence `setup()` runs once at boot.
+Ends with the relay forced OFF, so if the feeder was already talking to
+a live bus, that link drops until `RELAY ON` or a reboot re-engages it.

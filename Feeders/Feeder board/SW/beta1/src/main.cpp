@@ -1161,16 +1161,24 @@ void showStartupLedSequence() {
 // the relay OFF and the ext LED off when it returns, so the real gate
 // starts from a known, disconnected state either way.
 // ---------------------------
-void runDebugSelfTest() {
-  Serial1.println(F("Self-test: relay ON"));
-  setRelay(true);
-  setStatusLedColor(0, 255, 0); // green = relay ON
-  delay(300);
+// Relay hold time and cycle count: 300ms/1 cycle turned out to be too
+// quick to reliably hear the click over - longer hold plus a second
+// on/off cycle makes it much easier to confirm by ear.
+constexpr unsigned long SELFTEST_RELAY_HOLD_MS = 800;
+constexpr uint8_t SELFTEST_RELAY_CYCLES = 2;
 
-  Serial1.println(F("Self-test: relay OFF"));
-  setRelay(false);
-  setStatusLedColor(255, 0, 0); // red = relay OFF
-  delay(300);
+void runDebugSelfTest() {
+  for (uint8_t i = 0; i < SELFTEST_RELAY_CYCLES; i++) {
+    Serial1.println(F("Self-test: relay ON"));
+    setRelay(true);
+    setStatusLedColor(0, 255, 0); // green = relay ON
+    delay(SELFTEST_RELAY_HOLD_MS);
+
+    Serial1.println(F("Self-test: relay OFF"));
+    setRelay(false);
+    setStatusLedColor(255, 0, 0); // red = relay OFF
+    delay(SELFTEST_RELAY_HOLD_MS);
+  }
 
   Serial1.println(F("Self-test: ext LED ON"));
   setExtLed(true);
@@ -1183,6 +1191,19 @@ void runDebugSelfTest() {
   statusLed.show();
   // loop() repaints the RGB to the real magnet-detect red/green on its
   // very next iteration - no need to set that here.
+
+  // Calibration readout - not a pass/fail check (no expected value to
+  // compare against without a real load/meter attached), just prints
+  // what CALI/CALV are currently calibrated to and what they resolve to
+  // right now, so a bench tester can sanity-check both at a glance
+  // alongside the relay/LED test above. loadAnalogCal() must have run
+  // before this (see its call site in setup()) or these divide by zero.
+  Serial1.print(F("Self-test: IMON cal raw=")); Serial1.print(analogCal.imonCalRaw);
+  Serial1.print(F("=")); Serial1.print(analogCal.imonCalMa); Serial1.print(F("mA, now raw="));
+  Serial1.print(readIMonRaw()); Serial1.print(F(" = ")); Serial1.print(readIMonMilliamps()); Serial1.println(F("mA"));
+  Serial1.print(F("Self-test: 5V_READY cal raw=")); Serial1.print(analogCal.v5vCalRaw);
+  Serial1.print(F("=")); Serial1.print(analogCal.v5vCalMv); Serial1.print(F("mV, now raw="));
+  Serial1.print(readAdcInternalRef(PIN_5V_READY)); Serial1.print(F(" = ")); Serial1.print(read5vRailMillivolts()); Serial1.println(F("mV"));
 }
 
 // CMD_IDENTIFY / debug IDENTIFY: white flashes, distinct from the
@@ -1558,6 +1579,10 @@ void printHelp() {
   Serial1.println(F("  LED ON / LED OFF  external LED (A3/PC3) on/off"));
   Serial1.println(F("  RELAY ON / OFF  force the RS485 bus-connect relay, bench-only override -"));
   Serial1.println(F("                  bypasses the 5V-stable gate from setup(), does not touch it"));
+  Serial1.println(F("  SELFTEST        re-run the boot self-test on demand: relay x2 (audible"));
+  Serial1.println(F("                  click each way), ext LED, IMON/5V readout - CAUTION: ends"));
+  Serial1.println(F("                  with the relay forced OFF, disconnecting a live bus link"));
+  Serial1.println(F("                  until RELAY ON or a reboot re-engages it"));
   Serial1.println(F("  IMON            print PIN_I_MON raw ADC + calibrated mA (TPS26600 IMON)"));
   Serial1.println(F("  5VSTATUS        print PIN_5V_READY raw ADC (internal 1.1V ref) + calibrated"));
   Serial1.println(F("                  mV + estimated i5v (see I5V) + current relay state"));
@@ -1620,6 +1645,12 @@ void handleDebugLine(String line) {
   if (upper == "LED OFF") { setExtLed(false); Serial1.println(F("External LED OFF.")); return; }
   if (upper == "RELAY ON") { setRelay(true); Serial1.println(F("RS485 relay forced CONNECTED (bench override).")); return; }
   if (upper == "RELAY OFF") { setRelay(false); Serial1.println(F("RS485 relay forced disconnected (bench override).")); return; }
+  if (upper == "SELFTEST") {
+    Serial1.println(F("Running self-test (relay x2, ext LED, IMON/5V readout)..."));
+    runDebugSelfTest();
+    Serial1.println(F("Self-test done."));
+    return;
+  }
   if (upper == "IMON") {
     Serial1.print(F("I_MON raw=")); Serial1.print(readIMonRaw());
     Serial1.print(F(" mA=")); Serial1.println(readIMonMilliamps());
@@ -1839,14 +1870,14 @@ void setup() {
 
   Serial1.begin(DEBUG_BAUD);
   rs485Init();
-  runDebugSelfTest(); // beta1 bench aid - relay + ext LED toggle, RGB green/red/blue - see its own comment
+  loadAnalogCal(); // must happen before runDebugSelfTest() - it reports calibrated IMON/5V readings, and analogCal defaults to all-zero (div-by-zero in readIMonMilliamps()/read5vRailMillivolts()) until this loads
+  runDebugSelfTest(); // beta1 bench aid - relay + ext LED toggle, RGB green/red/blue, IMON/5V readout - see its own comment
   waitFor5vStableAndEngageRelay(); // blocking; see its own comment for the timeout/limitation
 
   seedSessionNonce(); // also reseeds random() - safe to draw the homing jitter right after
   homingReadyAtMs = millis() + HOMING_BOOT_DELAY_MS + random(0, HOMING_BOOT_JITTER_MAX_MS + 1);
   loadConfig(); // busAddress always starts ADDR_UNASSIGNED - re-earned via CMD_DISCOVER each boot
   loadHwInfo(); // tape width etc - set once at assembly, never reset by config changes
-  loadAnalogCal(); // IMON/5V_READY hand-calibration point, if CALI/CALV have ever been run
   loadFactorySerial(); // AT24CS02 identification page - read fresh every boot, never cached to EEPROM
 
   Serial1.println(F("beta1 feeder firmware ready"));
@@ -1879,12 +1910,24 @@ void loop() {
 
   if (now - lastHeartbeatMs >= 3000) {
     lastHeartbeatMs = now;
-    const float angleNow = readAngleDeg();
-    if (lastHeartbeatAngleValid && fabsf(angleErrorDeg(angleNow, lastHeartbeatAngle)) > 1.0f) {
-      Serial1.println(F("WARN: wheel moved between heartbeats with no move in progress"));
+    // Without a magnet, the AS5600 still ACKs over I2C and readAngleDeg()
+    // still returns *something*, but it's just noise with no real
+    // magnetic field to lock onto - comparing it across heartbeats would
+    // just be comparing noise to noise and firing false "wheel moved"
+    // warnings. Skip the check entirely, and drop the baseline
+    // (lastHeartbeatAngleValid = false) so that once a magnet reappears,
+    // the next heartbeat starts a fresh comparison instead of comparing
+    // a real angle against whatever noise was captured before.
+    if (magnetDetected()) {
+      const float angleNow = readAngleDeg();
+      if (lastHeartbeatAngleValid && fabsf(angleErrorDeg(angleNow, lastHeartbeatAngle)) > 1.0f) {
+        Serial1.println(F("WARN: wheel moved between heartbeats with no move in progress"));
+      }
+      lastHeartbeatAngle = angleNow;
+      lastHeartbeatAngleValid = true;
+    } else {
+      lastHeartbeatAngleValid = false;
     }
-    lastHeartbeatAngle = angleNow;
-    lastHeartbeatAngleValid = true;
   }
 
   if (digitalRead(PIN_nFAULT) == LOW) {
