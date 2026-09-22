@@ -27,12 +27,22 @@ itself.
    or that clicks a relay and flashes LEDs on every single power-up
    regardless of whether anyone's bench-testing it. Real diagnostics
    stay available; automatic bench theater doesn't.
-2. **Relay engagement is untouched** — still gated entirely behind
+2. **`showStartupLedSequence()`'s red/green/blue splash is disabled
+   too**, same reasoning as item 1 even though it's not a debug command
+   in its own right — an arbitrary color sequence at boot that doesn't
+   reflect any real status is still "boot behavior that doesn't mean
+   anything." Replaced with solid yellow (booting, not ready yet) held
+   from early in `setup()` until `loop()`'s first iteration overwrites
+   it with the real magnet-detect green/red — so the RGB now only ever
+   shows either "not ready" or true current status, nothing decorative.
+3. **Relay engagement is untouched** — still gated entirely behind
    `waitFor5vStableAndEngageRelay()`, which only engages once
    `PIN_5V_READY` has read stable for `RELAY_READY_STABLE_MS`. This was
    already the real safety behavior in beta1; nothing about the actual
-   gating logic changed for v0.01a, only the bench-aid noise around it.
-3. **`PIN_5V_READY`'s divider is still not correct on real hardware** as
+   gating logic changed for v0.01a, only the bench-aid noise around it
+   (including the yellow-LED change above — that's purely cosmetic,
+   the relay was never toggled by the LED sequence itself).
+4. **`PIN_5V_READY`'s divider is still not correct on real hardware** as
    of this fork — the PCB needs the 4.7k(rail)/1k(GND) resistor swap
    beta1 found was backwards (see `beta1/project.md`, "Open questions").
    Kept the firmware logic exactly as beta1 had it (internal-1.1V-

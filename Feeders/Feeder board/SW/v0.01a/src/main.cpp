@@ -1948,7 +1948,17 @@ void setup() {
   // held button can change by default.
   // runRelayButtonTest();
 
-  showStartupLedSequence();
+  // showStartupLedSequence() (red/green/blue splash) disabled for
+  // v0.01a - same reasoning as the test aids above: an arbitrary color
+  // pattern that doesn't reflect real status isn't "test scaffolding"
+  // in the same sense as SELFTEST/the relay button-test, but it's the
+  // same category of "boot behavior that doesn't mean anything" this
+  // release is meant to drop. Solid yellow instead - "booting, not
+  // ready yet" - until loop() overwrites it with the real magnet-detect
+  // green/red on its very first iteration once boot actually completes.
+  // showStartupLedSequence();
+  statusLed.setBrightness(RGB_MAX_BRIGHTNESS);
+  setStatusLedColor(255, 255, 0); // yellow - booting, not ready
 
   brakeMotorA();
   lockMotorBOff();
