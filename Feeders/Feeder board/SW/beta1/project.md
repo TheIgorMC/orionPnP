@@ -640,18 +640,27 @@ pio run -e atmega328pb_isp -t fuses    # one-time, or after board_hardware.* cha
 pio run -e atmega328pb_isp -t upload
 ```
 
-Or `./flash.ps1` (PowerShell), which chains fuses → chip erase (best-
-effort) → a short settle delay → upload, and takes `-SkipFuses`/
-`-SkipErase` for routine reflashes once fuses are already correct on a
-given chip. The settle delay matters because a fuse write is followed by
-an avrdude-issued target reset, and fuse bits that affect the clock
-(CKDIV8/oscillator selection) only take effect from that reset onward —
-hitting the target with another ISP transaction immediately after can
-race it. This procedure isn't verified against the actual toolchain in
-every PlatformIO version (in particular, whether `-t erase` exists as a
-named target for `atmelavr` wasn't confirmed when the script was
-written) — see the script's own header comment for what's a plain
-`pio run` wrapper vs. an actual technical requirement.
+Or `./flash.ps1` (PowerShell): build → burn fuses → chip erase → settle
+delay → write + verify flash. `-SkipFuses`/`-SkipErase` for routine
+reflashes once fuses are already correct on a given chip. Erase and
+flash go through `avrdude` directly rather than `pio -t erase`/
+`pio -t upload` — matching the actual hand-run bench commands for this
+board:
+
+```
+avrdude -C <conf> -c usbasp -p m328pb -e
+avrdude -C <conf> -c usbasp -p m328pb -D -U flash:w:<hex>:i -U flash:v:<hex>:i
+```
+
+(`-e` standalone erase; `-D` on the flash step skips avrdude's own
+implicit auto-erase since it was just erased explicitly; the second `-U`
+verifies the write.) The settle delay matters because a fuse write is
+followed by an avrdude-issued target reset, and fuse bits that affect the
+clock (CKDIV8/oscillator selection) only take effect from that reset
+onward — hitting the target with another ISP transaction immediately
+after can race it. Fuses themselves still go through `pio -t fuses`, not
+a raw avrdude call — no hand-run fuse-burn command for this board has
+turned up yet to match against.
 
 Debug port (Serial1, 9600 baud) is only reachable through the ISP header
 (D11/D12) — see `pins_config.h`. It's mutually exclusive with ISP flashing
