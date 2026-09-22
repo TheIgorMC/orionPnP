@@ -1382,6 +1382,74 @@ void calibrateZero() {
 }
 
 // ---------------------------
+// Boot-time homing gate - beta1 only. "Homing" here is calibrateZero()
+// above (the DRV8833 still/breakaway duty characterization), the only
+// motor movement this firmware ever does on its own without a host or
+// debug-port command asking for it. Deliberately NOT called synchronously
+// from setup() - checkHoming() runs from loop() instead and holds off on
+// calling it until BOTH of these pass:
+//
+// 1. HOMING_BOOT_DELAY_MS plus a per-feeder random jitter
+//    (HOMING_BOOT_JITTER_MAX_MS) have elapsed since setup() finished the
+//    rest of its work. Two reasons: gives this board's own insertion
+//    inrush (TPS26600 soft-start, bulk cap charging) time to settle
+//    before stacking a motor breakaway-current spike on top of it, and -
+//    since every feeder on a bus that just got powered up together hits
+//    this same gate within milliseconds of each other - the random
+//    jitter spreads their homing attempts across ~2s instead of all of
+//    them hitting the shared 12V rail at once. Same idea as
+//    DISCOVERY_JITTER_MAX_MS, just a much wider window: that one only
+//    has to avoid a bus collision, this one has to avoid a PSU current
+//    spike across a whole populated bus.
+// 2. Once a magnet IS seen, it has to stay detected continuously for
+//    HOMING_MAGNET_STABLE_MS before homing fires - a magnet that was
+//    just placed (bench test, wheel/sprocket dropped on while the board
+//    was already running) may still be settling into position, and a
+//    bare "detected this instant" read is too easy to catch mid-
+//    placement. Any dropout resets the stability timer - only a
+//    continuous detection counts. No magnet at all just means this timer
+//    never starts, so no homing ever fires - calibrateZero() already
+//    falls back to defaults without moving the motor in that case, but
+//    gating it here means a feeder with nothing to calibrate against
+//    doesn't even sit through the boot-delay wait for no reason.
+//
+// Fires at most once per boot (homingDone latches true right after).
+// ---------------------------
+constexpr unsigned long HOMING_BOOT_DELAY_MS = 1000;
+constexpr unsigned long HOMING_BOOT_JITTER_MAX_MS = 2000; // wider than DISCOVERY_JITTER_MAX_MS - staggers PSU inrush across a whole bus, not just a bus collision
+constexpr unsigned long HOMING_MAGNET_STABLE_MS = 5000;
+
+bool homingDone = false;
+unsigned long homingReadyAtMs = 0; // set once in setup(), after seedSessionNonce() reseeds random()
+unsigned long magnetStableSinceMs = 0; // millis() the magnet was last (re)detected; only meaningful while magnetTrackedLastLoop
+bool magnetTrackedLastLoop = false;
+
+void checkHoming() {
+  if (homingDone) return;
+
+  const unsigned long now = millis();
+  if (now < homingReadyAtMs) return; // still in the boot settle/stagger window
+
+  if (!magnetDetected()) {
+    magnetTrackedLastLoop = false;
+    return; // nothing to home against yet - keep waiting, not a failure
+  }
+
+  if (!magnetTrackedLastLoop) {
+    // Magnet just (re)appeared - start the stability timer fresh.
+    magnetTrackedLastLoop = true;
+    magnetStableSinceMs = now;
+    return;
+  }
+
+  if (now - magnetStableSinceMs < HOMING_MAGNET_STABLE_MS) return; // not stable long enough yet
+
+  homingDone = true;
+  Serial1.println(F("Magnet stable for HOMING_MAGNET_STABLE_MS - homing now."));
+  calibrateZero();
+}
+
+// ---------------------------
 // Debug port (Serial1): status/help + local component config for bench use
 // ---------------------------
 void printStatus() {
@@ -1715,7 +1783,8 @@ void setup() {
   rs485Init();
   waitFor5vStableAndEngageRelay(); // blocking; see its own comment for the timeout/limitation
 
-  seedSessionNonce();
+  seedSessionNonce(); // also reseeds random() - safe to draw the homing jitter right after
+  homingReadyAtMs = millis() + HOMING_BOOT_DELAY_MS + random(0, HOMING_BOOT_JITTER_MAX_MS + 1);
   loadConfig(); // busAddress always starts ADDR_UNASSIGNED - re-earned via CMD_DISCOVER each boot
   loadHwInfo(); // tape width etc - set once at assembly, never reset by config changes
   loadAnalogCal(); // IMON/5V_READY hand-calibration point, if CALI/CALV have ever been run
@@ -1725,11 +1794,15 @@ void setup() {
   printStatus();
 
   if (!magnetDetected()) {
-    Serial1.println(F("WARN: AS5600 magnet not detected at startup."));
+    Serial1.println(F("WARN: AS5600 magnet not detected at startup - homing deferred until one is."));
   }
 
   targetAngleDeg = readAngleDeg();
-  calibrateZero();
+  // Homing (calibrateZero()) is intentionally NOT called here - see
+  // checkHoming() in loop(), which it's deferred to: a boot-settle/
+  // stagger delay plus a magnet-placement stability check both have to
+  // pass first, and neither should block the debug port or RS485 bus
+  // from responding while they elapse.
   printHelp();
   printStatus();
 }
@@ -1765,6 +1838,8 @@ void loop() {
     return;
   }
   digitalWrite(PIN_FAULT_LED, LOW);
+
+  checkHoming(); // no-op once homingDone; see its own comment for the boot-delay/stagger + magnet-stability gate
 
   if (buttonPressed(PIN_SW1, lastSw1EdgeMs)) {
     targetAngleDeg = normalizeDeg(targetAngleDeg + DEG_PER_TOOTH);

@@ -37,6 +37,8 @@ outputs. None of this is on any board built so far.
    rather than touching `PIN_AIN1`/`PIN_AIN2` (those are MCU-to-driver
    input pins, unaffected by an output-side swap) — see pins_config.h if
    this interpretation of "OUT1/OUT2 swapped" turns out to be wrong.
+4. **Boot-time homing is deferred and gated**, not run synchronously from
+   `setup()` like alpha02/03's did — see "Boot-time homing gate" below.
 
 D13/PB5 (the relay pin) is the same pin `alpha03` freed up by moving
 `PIN_EXT_LED` off it. Reusing it for the relay is a deliberate, different
@@ -131,6 +133,46 @@ somewhat *lower* than `i5vEstMa`, not higher. Good enough as a "does this
 look roughly sane" bench check (`I5V` debug command, `i5vEstMa` in
 `STATUS`/`5VSTATUS`), not a real measurement — if that's ever needed,
 it'd want its own current-sense hardware on the 5V rail.
+
+### Boot-time homing gate
+
+alpha02/03 called `calibrateZero()` (the DRV8833 still/breakaway duty
+characterization — the only motor movement this firmware ever does on its
+own, unprompted by a host or debug command) synchronously from `setup()`,
+right at boot. beta1 defers it to a `checkHoming()` gate polled from
+`loop()` instead, for two reasons that only started to matter once real
+hardware — a shared 12V rail feeding multiple feeders through individual
+TPS26600 eFuses, hot-pluggable while the bus is live — entered the
+picture:
+
+- **Boot-insertion PSU settle + per-feeder stagger.** `HOMING_BOOT_DELAY_MS`
+  (1000ms) has to elapse, plus a random `HOMING_BOOT_JITTER_MAX_MS` (up to
+  2000ms, drawn from the same `random()` call `seedSessionNonce()` already
+  reseeds) before homing is even attempted. The fixed part gives this
+  board's own insertion inrush (TPS26600 soft-start, bulk cap charging)
+  time to settle before a motor breakaway-current spike stacks on top of
+  it; the random part matters on a bus where several feeders get powered
+  up together and would otherwise all hit this gate within milliseconds of
+  each other — without the jitter, they'd all draw their breakaway current
+  spike from the shared rail at the same instant. Same idea as
+  `DISCOVERY_JITTER_MAX_MS`, just a much wider window: that one only has
+  to avoid a bus-reply collision, this one has to avoid a PSU current
+  spike across a whole populated bus.
+- **Magnet-placement stability.** Once `magnetDetected()` goes true, it
+  has to stay true continuously for `HOMING_MAGNET_STABLE_MS` (5000ms)
+  before homing fires — any dropout resets the timer. Covers a magnet
+  placed *after* the board's already running (bench test, wheel/sprocket
+  dropped on mid-session) that might still be settling into position when
+  first seen; a single "detected this instant" read was too easy to catch
+  mid-placement. No magnet at all just means the timer never starts, so
+  homing never fires for that feeder — `calibrateZero()` already falls
+  back to defaults without moving the motor when ungated, but checking
+  here first means a feeder with nothing to calibrate against doesn't sit
+  through the boot-delay wait for no reason either.
+
+`checkHoming()` runs once per `loop()` iteration and is a no-op after
+`homingDone` latches true (at most once per boot). It's called right after
+the `PIN_nFAULT` check clears, so a fault condition also holds off homing.
 
 ---
 
