@@ -640,6 +640,19 @@ pio run -e atmega328pb_isp -t fuses    # one-time, or after board_hardware.* cha
 pio run -e atmega328pb_isp -t upload
 ```
 
+Or `./flash.ps1` (PowerShell), which chains fuses → chip erase (best-
+effort) → a short settle delay → upload, and takes `-SkipFuses`/
+`-SkipErase` for routine reflashes once fuses are already correct on a
+given chip. The settle delay matters because a fuse write is followed by
+an avrdude-issued target reset, and fuse bits that affect the clock
+(CKDIV8/oscillator selection) only take effect from that reset onward —
+hitting the target with another ISP transaction immediately after can
+race it. This procedure isn't verified against the actual toolchain in
+every PlatformIO version (in particular, whether `-t erase` exists as a
+named target for `atmelavr` wasn't confirmed when the script was
+written) — see the script's own header comment for what's a plain
+`pio run` wrapper vs. an actual technical requirement.
+
 Debug port (Serial1, 9600 baud) is only reachable through the ISP header
 (D11/D12) — see `pins_config.h`. It's mutually exclusive with ISP flashing
 on that same header at any given instant.
