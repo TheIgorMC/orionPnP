@@ -1,4 +1,4 @@
-# Feeder Firmware Quick Reference (alpha01 / alpha02 / alpha03 / beta1)
+# Feeder Firmware Quick Reference (alpha01 / alpha02 / alpha03 / beta1 / v0.01a)
 
 Debug port: **Serial1**, 9600 baud, newline-terminated, via the ISP header
 (D11/D12 — shares that header with ISP flashing, mutually exclusive at any
@@ -6,8 +6,14 @@ given instant). Not case-sensitive. `HELP`/`?` prints this list live from
 whichever firmware is actually flashed.
 
 Full design rationale for any of this: `alpha01/project.md` /
-`alpha02/project.md` / `alpha03/project.md` / `beta1/project.md`. Full
-RS485 wire protocol spec (opcodes, error codes): **`PROTOCOL.md`**.
+`alpha02/project.md` / `alpha03/project.md` / `beta1/project.md` /
+`v0.01a/project.md`. Full RS485 wire protocol spec (opcodes, error
+codes): **`PROTOCOL.md`**.
+
+`v0.01a` is the first MAJOR-version release (forked from `beta1`) — same
+command set as `beta1` throughout this doc, except `SELFTEST` and the
+SW1/SW2-held-at-boot relay button-test mode aren't run automatically on
+every boot anymore (both still work on demand, see their entries below).
 
 ## Bring-up / status
 

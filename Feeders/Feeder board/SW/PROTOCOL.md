@@ -1,11 +1,13 @@
-# Feeder RS485 Protocol (beta1) — current state
+# Feeder RS485 Protocol (beta1 / v0.01a) — current state
 
 This is the canonical spec for the frame protocol implemented in
-`beta1/src/main.cpp`, kept separate from `alpha01`/`alpha02`/`alpha03`/
-`beta1`'s `project.md` files so it doesn't drift out of sync across four
-copies. Still **not Modbus** — see `alpha01/project.md`'s Modbus
-feasibility section for why that's still an open decision; this is what's
-actually implemented today.
+`beta1/src/main.cpp` and `v0.01a/src/main.cpp` (identical protocol
+surface — v0.01a only disables two bench-only auto-run test aids, see
+`v0.01a/project.md`), kept separate from `alpha01`/`alpha02`/`alpha03`/
+`beta1`/`v0.01a`'s `project.md` files so it doesn't drift out of sync
+across five copies. Still **not Modbus** — see `alpha01/project.md`'s
+Modbus feasibility section for why that's still an open decision; this
+is what's actually implemented today.
 
 - `alpha03` implements everything here except `CMD_STATUS_INFO`'s last
   three payload bytes (`iMonRaw`/`relayEngaged` - alpha03 has no I_MON or
