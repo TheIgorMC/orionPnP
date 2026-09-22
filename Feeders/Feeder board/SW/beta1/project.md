@@ -23,7 +23,7 @@ opposite motor connectors from what alpha01-03 assumed — see item 5 below.
    can't be, since the MCU only runs once the eFuse is already on, so
    there's no fault state where firmware could still be alive to report
    it.
-2. **`PIN_5V_READY` (A7/PE3) + `PIN_485_RELAY` (D13/PB5)** — a power-up
+2. **`PIN_5V_READY` (A2/PC2) + `PIN_485_RELAY` (A7/PE3)** — a power-up
    sequencing feature: the 5V rail is monitored via a 4.7k/1k divider until
    it reads stable for `RELAY_READY_STABLE_MS` (500ms), and only then is
    `PIN_485_RELAY` engaged, physically connecting this feeder's RS485
@@ -31,7 +31,12 @@ opposite motor connectors from what alpha01-03 assumed — see item 5 below.
    mid-power-up (or hot-plugged) from electrically disturbing a bus other
    feeders/the host are already using. See `waitFor5vStableAndEngageRelay()`
    in `src/main.cpp` and the "5V rail reading" section below for a real
-   electrical gotcha this ran into.
+   electrical gotcha this ran into. (These two pins were originally speced
+   the other way around — `PIN_5V_READY` on A7/PE3, `PIN_485_RELAY` on
+   D13/PB5 — corrected once real hardware clarified PE3 is actually the
+   relay drive. D13/PB5 is unused again as a result. Also broke
+   `seedSessionNonce()`'s entropy source, which assumed A2 was a floating
+   pin — it's `PIN_5V_READY` now, so that XOR was dropped.)
 3. **Motor A direction defaults to inverted** (`invertMotorA = true`) —
    the final board's DRV8833 OUT1/OUT2 (motor-output side) are swapped
    relative to the bench units this control loop was tuned against.
@@ -57,11 +62,12 @@ opposite motor connectors from what alpha01-03 assumed — see item 5 below.
    against the old (wrong) channel assignment — unverified against this
    fix, re-test direction on real hardware before trusting it.
 
-D13/PB5 (the relay pin) is the same pin `alpha03` freed up by moving
-`PIN_EXT_LED` off it. Reusing it for the relay is a deliberate, different
-tradeoff than the LED had: the relay is meant to default to disconnected
-at reset and during ISP programming anyway, so sharing the ISP header's
-SCK line here doesn't cost anything the design didn't already want.
+D13/PB5, the pin `alpha03` freed up by moving `PIN_EXT_LED` off it, was
+originally meant to be reused for the relay — that tradeoff (the relay
+defaulting to disconnected at reset/during ISP programming anyway, so
+sharing the ISP header's SCK line wouldn't cost anything) no longer
+applies now that the relay lives on A7/PE3 instead. D13/PB5 is simply
+unused on beta1's real pin map.
 
 ### 5V rail reading: a reference gotcha
 
@@ -609,12 +615,15 @@ hardware) — see the `TODO` comment at its definition.
   if it now moves the feed motor backwards.
 - **A6/A7 = PE2/PE3 — confirmed correct**, checked directly against the
   installed MiniCore toolchain (`~/.platformio/packages/framework-arduino-avr-minicore/variants/pb-variant/pins_arduino.h`):
-  `PIN_A7 = 26`, `PIN_PE3 = 26`, `analogPinToChannel(26) = 7` (ADC7), and
-  `INTERNAL` resolves to the 1.1V bandgap (`REFS1:REFS0=11`) for
-  `__AVR_ATmega328PB__` in `Arduino.h`. Not a guess anymore - if a "zero
-  voltage movement" symptom shows up on `PIN_5V_READY`/`PIN_I_MON`, it's
-  not this; look at wiring/population on the actual board instead (this
-  was the first board revision to route these pins at all).
+  `PIN_A6 = 25`, `PIN_PE2 = 25`, `PIN_A7 = 26`, `PIN_PE3 = 26`,
+  `analogPinToChannel(25/26) = 6/7` (ADC6/ADC7), and `INTERNAL` resolves
+  to the 1.1V bandgap (`REFS1:REFS0=11`) for `__AVR_ATmega328PB__` in
+  `Arduino.h`. Confirmed the mapping is right, but the actual "zero
+  voltage movement" symptom that prompted this check turned out to be a
+  different bug entirely — `PIN_5V_READY` wasn't really on A7 at all;
+  see item 2 in "What's different from alpha03" above and the corrected
+  pin (A2/PC2). A7/PE3 is `PIN_485_RELAY` now, a digital output, not
+  something `analogRead()` touches at all.
 - **`PIN_485_RELAY` polarity** (`RELAY_ACTIVE_HIGH = true`) — confirmed:
   a low-side NMOS with a pull-down (GPIO → gate, source → GND, coil
   between drain and supply), so HIGH = on = relay energized matches the

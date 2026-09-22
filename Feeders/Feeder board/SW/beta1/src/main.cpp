@@ -17,7 +17,7 @@
      FLT# pins are NOT wired to the MCU - it can't be, since the MCU only
      runs once the eFuse is already on, so there's no fault state where
      firmware could still be reading a pin to report it.
-  2. PIN_5V_READY (A7/PE3) - analog, 5V rail via an external 4.7k/1k
+  2. PIN_5V_READY (A2/PC2) - analog, 5V rail via an external 4.7k/1k
      divider (4.7k to the rail, 1k to GND - picked over 10k/1k for ~2x
      the ADC resolution, see pins_config.h). Read against the ATmega's
      INTERNAL 1.1V reference, not the default - see "Power sequencing"
@@ -35,12 +35,11 @@
      (IMON + 12V-nominal power balance) - debug/bench convenience only,
      not a real measurement; see that function's comment for what it
      ignores.
-  3. PIN_485_RELAY (D13/PB5, reusing the pin PIN_EXT_LED vacated) - a
-     MOSFET-driven relay coil that physically connects/disconnects this
-     feeder's RS485 lines from the shared bus. Held disconnected until
-     PIN_5V_READY has read stable for RELAY_READY_STABLE_MS, so a feeder
-     that's still mid-power-up can't electrically disturb a bus other
-     feeders/the host are already using.
+  3. PIN_485_RELAY (A7/PE3) - a MOSFET-driven relay coil that physically
+     connects/disconnects this feeder's RS485 lines from the shared bus.
+     Held disconnected until PIN_5V_READY has read stable for
+     RELAY_READY_STABLE_MS, so a feeder that's still mid-power-up can't
+     electrically disturb a bus other feeders/the host are already using.
   4. Motor A's effective direction defaults to inverted (invertMotorA =
      true) - the final board's DRV8833 OUT1/OUT2 (motor-output side, not
      the MCU-to-driver AIN side) are swapped relative to the bench units
@@ -55,12 +54,21 @@
      pins_config.h for the fix and why invertMotorA=true above is
      unverified against it (validated against the old channel assignment,
      not this one).
+  6. PIN_5V_READY and PIN_485_RELAY (points 2/3 above) were originally
+     speced backwards: PE3/A7 was PIN_5V_READY (an analog input) and
+     PIN_485_RELAY was on D13/PB5. Real hardware has it the other way -
+     PE3/A7 is the relay drive (digital OUTPUT), and PIN_5V_READY is on
+     A2/PC2 instead. D13/PB5 is now unused again. Also broke
+     seedSessionNonce()'s entropy source, which assumed A2 was a floating
+     ADC pin - it's PIN_5V_READY now, a real signal, so that XOR was
+     dropped (see its own comment).
 
-  Point 5 is the first of this list to have actually been tested on real
-  beta1 hardware; the rest (new pins, the OUT1/OUT2 direction swap) are
-  still ahead of any board built so far - same situation alpha03 was
-  already in for its own additions, firmware written for a schematic
-  revision that doesn't exist as a built board yet.
+  Points 5 and 6 are the only entries on this list confirmed against real
+  beta1 hardware so far; the rest (new pins otherwise, the OUT1/OUT2
+  direction swap) are still ahead of any board built so far - same
+  situation alpha03 was already in for its own additions, firmware
+  written for a schematic revision that doesn't exist as a built board
+  yet.
 
   Also carries forward everything alpha03 added on top of alpha02: AT24CS02
   I2C EEPROM + factory serial number (FeederHardwareInfo now lives there,
@@ -204,13 +212,17 @@ bool isValidAssignedAddress(uint8_t a) {
   return a >= ADDR_MIN && a <= ADDR_MAX;
 }
 
-// Seeds from whatever entropy an unloaded AVR has handy: a floating ADC
-// pin plus boot-to-boot jitter in micros(). Not cryptographically unique -
-// doesn't need to be. It only has to avoid colliding with whichever other
-// feeders happen to be replying to the same CMD_DISCOVER round, and a
-// fresh value is drawn every boot anyway.
+// Seeds from boot-to-boot jitter in micros(). Used to XOR in an
+// analogRead(A2) too, on the assumption A2 was a floating/unconnected
+// ADC pin - it isn't: A2 is PIN_5V_READY, a real connected signal (see
+// pins_config.h), and every other analog-capable pin on this board
+// (A0-A7) is spoken for as well (buttons, I2C, IMON, relay drive) - none
+// left floating to harvest noise from. Not cryptographically unique -
+// doesn't need to be. It only has to avoid colliding with whichever
+// other feeders happen to be replying to the same CMD_DISCOVER round,
+// and a fresh value is drawn every boot anyway.
 void seedSessionNonce() {
-  randomSeed(analogRead(A2) ^ micros());
+  randomSeed(micros());
   sessionNonce = (uint16_t)random(0, 65536);
 }
 

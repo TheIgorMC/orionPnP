@@ -175,7 +175,7 @@ expect this hardware, ahead of the schematic actually adding it.
   "Hand calibration" below. `EN`/`FLT#` are not wired to the MCU — the MCU
   only runs once the eFuse is already on, so there's no fault state where
   firmware could still be reading a pin to report it.
-- **`PIN_5V_READY` (A7/PE3) + `PIN_485_RELAY` (D13/PB5)** — a 4.7k
+- **`PIN_5V_READY` (A2/PC2) + `PIN_485_RELAY` (A7/PE3)** — a 4.7k
   (rail)/1k (GND) divider on the 5V rail gates a MOSFET-driven relay that physically
   connects/disconnects this feeder's RS485 lines from the shared bus.
   The relay stays disconnected at reset and only engages once the rail

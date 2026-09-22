@@ -17,7 +17,8 @@
   Pin numbers are Arduino-style digital/analog numbers as exposed by
   MiniCore's ATmega328PB variant (classic Uno-compatible numbering:
   D0-D13, A0-A5, plus A6/A7 for the 328PB's extra PE2/PE3 pins - see
-  PIN_I_MON/PIN_5V_READY below for why these two specifically are used).
+  PIN_I_MON/PIN_485_RELAY below for why these two specifically are used;
+  PIN_5V_READY is on A2, one of the classic ADC0-5 pins, not A6/A7).
   SDA/SCL/USART0/USART1 are fixed in silicon and not reassignable -
   listed below for reference only.
 */
@@ -130,16 +131,15 @@ constexpr uint8_t PIN_EXT_LED = A3; // PC3 - standard LED, simple on/off, not th
 // Power sequencing / rail monitoring - new in beta1, not on any V0.2a
 // board built so far.
 //
-// PIN_I_MON and PIN_5V_READY land on A6/A7 - the ATmega328PB's two extra
-// ADC-capable pins (PE2/ADC6 and PE3/ADC7) that don't exist on the
-// classic 328P. Both are spare/unpopulated on the current V0.2a schematic
-// (present on the MCU symbol with no net attached) so this isn't a new
-// deviation the way PIN_EXT_LED's move was - beta1 is the first revision
-// to actually wire them. A6/A7 = PE2/PE3 is CONFIRMED correct against
-// the actual installed MiniCore toolchain (pins_arduino.h: PIN_A7=26,
-// PIN_PE3=26, analogPinToChannel(26)=7/ADC7) - if a signal on either pin
-// reads dead, it's not this mapping; check wiring/population on the
-// board instead (this is the first revision to route these pins at all).
+// PIN_I_MON is on A6 (PE2/ADC6), one of the ATmega328PB's two extra
+// ADC-capable pins that don't exist on the classic 328P - confirmed
+// correct against the actual installed MiniCore toolchain
+// (pins_arduino.h: PIN_A6=25, PIN_PE2=25, analogPinToChannel(25)=6/ADC6).
+//
+// PIN_5V_READY moved to A2 (PC2/ADC2, one of the classic ADC0-5 pins) -
+// NOT A7/PE3 as originally speced here. PE3 (A7) is the relay drive
+// (PIN_485_RELAY, below) instead. Two separate, real signals - the
+// earlier draft of this file had them backwards.
 // ---------------------------------------------------------------
 // TPS26600 eFuse IMON output (RIMON=309k, 1%) - voltage proportional to
 // 12V rail load current, linear through the origin: ~4.07V at the 200mA
@@ -162,20 +162,18 @@ constexpr uint8_t PIN_I_MON = A6; // PE2/ADC6 - analog, TPS26600 IMON (12V rail 
 // would be measuring the divided 5V rail against a reference that IS the
 // same 5V rail, which reads the same fixed ratio regardless of the
 // rail's actual absolute value and so cannot detect "still ramping up"
-// at all.
-constexpr uint8_t PIN_5V_READY = A7; // PE3/ADC7 - analog, 5V rail via 4.7k/1k divider
+// at all - true regardless of which pin senses it, not specific to A7.
+constexpr uint8_t PIN_5V_READY = A2; // PC2/ADC2 - analog, 5V rail via 4.7k/1k divider
 
 // Digital output -> small N-channel MOSFET gate -> relay coil that
 // physically connects/disconnects this feeder's RS485 A/B lines to the
 // shared rail. HIGH = MOSFET on = relay energized = bus connected
-// (assumes a low-side switch: GPIO -> gate, MOSFET source -> GND, relay
-// coil between the MOSFET drain and the coil supply rail - flip
-// RELAY_ACTIVE_HIGH in main.cpp if the actual board inverts this).
-// Reuses D13/PB5, freed up by PIN_EXT_LED's move off the ISP header's SCK
-// line in alpha03. Sharing that pin with ISP flashing again is an
-// acceptable tradeoff here (unlike for the LED): the relay is meant to be
-// de-energized/bus-disconnected by default at reset and during
-// programming anyway - see main.cpp for the power-up sequencing this
-// gates (does not engage until PIN_5V_READY has read stable for
+// (low-side switch: GPIO -> gate, MOSFET source -> GND with a pull-down
+// resistor, relay coil between the MOSFET drain and the coil supply rail
+// - flip RELAY_ACTIVE_HIGH in main.cpp if the actual board inverts this).
+// On A7/PE3, NOT D13/PB5 as originally speced here - freeing D13/PB5
+// back up (unused since PIN_EXT_LED moved off it in alpha03; nothing
+// reuses it now). See main.cpp for the power-up sequencing this gates
+// (does not engage until PIN_5V_READY has read stable for
 // RELAY_READY_STABLE_MS).
-constexpr uint8_t PIN_485_RELAY = 13; // PB5 - RS485 bus-connect relay coil (via MOSFET)
+constexpr uint8_t PIN_485_RELAY = A7; // PE3 - RS485 bus-connect relay coil (via MOSFET), OUTPUT
