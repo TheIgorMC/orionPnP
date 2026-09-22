@@ -508,6 +508,8 @@ uint8_t readStatus();
 uint16_t angleDegToRaw12(float deg);
 void brakeMotorA();
 void brakeMotorB();
+uint16_t readIMonRaw(); // beta1 only - CMD_GET_STATUS's iMonRaw field, defined with the rest of power sequencing
+extern bool relayEngaged; // beta1 only - CMD_GET_STATUS's relayEngaged field, defined with setRelay()
 
 // ---------------------------
 // Move/feed error codes - returned by moveToAngle()/commandMoveTo() and
@@ -1603,9 +1605,10 @@ void handleDebugLine(String line) {
   if (upper.startsWith("CALI ")) {
     const float ma = upper.substring(5).toFloat();
     if (ma <= 0) { Serial1.println(F("Refused: CALI needs a positive measured mA (e.g. CALI 87.5).")); return; }
-    analogCal.imonCalRaw = readIMonRaw();
+    const uint16_t raw = readIMonRaw();
+    if (raw == 0) { Serial1.println(F("Refused: PIN_I_MON reads 0 raw right now, can't calibrate against it.")); return; }
+    analogCal.imonCalRaw = raw;
     analogCal.imonCalMa = (uint16_t)(ma + 0.5f);
-    if (analogCal.imonCalRaw == 0) { Serial1.println(F("Refused: PIN_I_MON reads 0 raw right now, can't calibrate against it.")); return; }
     saveAnalogCal();
     Serial1.print(F("IMON calibrated: raw=")); Serial1.print(analogCal.imonCalRaw);
     Serial1.print(F(" = ")); Serial1.print(analogCal.imonCalMa); Serial1.println(F("mA"));
