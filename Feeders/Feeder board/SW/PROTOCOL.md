@@ -93,6 +93,7 @@ see **Error codes** below; otherwise empty).
 | `CMD_STOP` | `0x31` | — | `CMD_ACK` | immediate brake, both motors |
 | `CMD_IDENTIFY` | `0x32` | `[blinkCount]` (0 ⇒ default 3) | `CMD_ACK` (after blinking) | white LED flashes, distinct from the magnet-status green/red |
 | `CMD_GET_SERIAL` | `0x33` | **alpha03+** — — | `CMD_SERIAL_INFO` (`0xA3`): 16 bytes | AT24CS02 factory-programmed 128-bit serial number; `CMD_NACK` if the chip didn't respond |
+| `CMD_PEEL` | `0x34` | **v0.01a+** — `[dir(0=fwd,1=rev), duration×10ms (1–255)]` | `CMD_ACK` (after the run) / `CMD_NACK` | runs the peel motor alone (open loop) to tension the cover tape; stops early on a DRV8833 fault |
 
 ## Error codes
 

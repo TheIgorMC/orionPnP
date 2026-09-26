@@ -18,6 +18,11 @@
   waitFor5vStableAndEngageRelay(), which the relay only ever actually
   engages through - is untouched.
 
+  Also v0.01a: status RGB = yellow booting / blue ready / red error /
+  purple moving; peel motor runnable on its own (SW2 hold, PEEL, CMD_PEEL)
+  for tape tensioning; compact debug output (TRACE off by default); no
+  String class in the debug parser. See project.md items 5-9.
+
   PIN_5V_READY's divider still isn't correct on real hardware as of this
   fork (the PCB needs the 4.7k/1k resistor swap - see beta1/project.md,
   "Open questions") - kept implemented anyway rather than stripped out,
@@ -156,36 +161,31 @@ const float STALL_MOVE_THRESHOLD_DEG = 0.15f;
 
 // SW2/motor B open-loop jog (see file header - motor B has no encoder on
 // this design, so there's no closed-loop equivalent to fall back to).
-const int   JOG_DUTY = FAST_DUTY;
-const unsigned long JOG_DURATION_MS = 300;
+// Peel motor is also run on its own to tension the cover tape: SW2 runs it
+// for as long as the button is held (PEEL_HOLD_MAX_MS safety cap), PEEL
+// debug command / CMD_PEEL run it for a set time.
+const int   PEEL_DUTY = FAST_DUTY;
+const unsigned long PEEL_HOLD_MAX_MS = 10000;
+const unsigned long PEEL_CMD_MAX_MS = 5000;
 
 const bool BUTTONS_ACTIVE_LOW = true;
 const unsigned long DEBOUNCE_MS = 20;
 
-// Runtime-flippable motor direction (replaces alpha01's compile-time
-// INVERT_DIRECTION constant). These let direction be corrected from the
-// debug port or the bus (INVERTA/INVERTB, CMD_SET_INVERT_DIR) without
-// reflashing or re-soldering. Independent per motor since there's no
-// reason A and B would necessarily need the same correction. RAM-only for
-// now (reset to this default on reboot) - see project.md if either turns
-// out to be a fixed-per-unit characteristic worth persisting to EEPROM
-// instead.
+// Feed direction (motor A). invertMotorA flips the motor drive AND the
+// AS5600 angle together - flipping only one of them would make the closed
+// loop drive away from its target and never settle. Logical "forward"
+// (increasing angle) always means "feed tape forward".
 //
-// invertMotorA defaults to true for beta1: the bench units this control
-// loop was originally tuned/validated against had DRV8833 OUT1/OUT2
-// (motor-output side) swapped relative to what beta1 turned out to need.
-// Still overridable at runtime (INVERTA/CMD_SET_INVERT_DIR) if this
-// turns out to be wrong.
+// Base state (invertMotorA = false): motor drive inverted, encoder
+// normal - the combination the loop was validated with, and confirmed on
+// the real v0.01a board to settle fine but feed the tape BACKWARDS.
+// invertMotorA = true flips both from there (motor not inverted, encoder
+// mirrored), so it's the default. INVERTA / CMD_SET_INVERT_DIR still flip
+// it at runtime (RAM-only) - flipping mirrors the angle, so any saved tape
+// zero no longer points at the same hole.
 //
-// Separate from, and NOT a fix for, the channel-level swap the first
-// beta1 bench test actually found: commanding motor A moved the peel
-// motor instead of the feed motor. That's which DRV8833 channel drives
-// which physical motor connector - fixed in pins_config.h (PIN_AIN1/
-// PIN_AIN2 <-> PIN_BIN1/PIN_BIN2), not here. Because that fix changes
-// which physical channel "motor A" now drives, invertMotorA=true above
-// is UNVERIFIED against it - it was only ever validated against the old,
-// swapped channel assignment. Re-test direction on real hardware; don't
-// assume it's still correct.
+// invertMotorB is a plain motor-polarity flip (peel motor has no encoder).
+constexpr bool MOTOR_A_BASE_INVERT = true;
 bool invertMotorA = true;
 bool invertMotorB = false;
 
@@ -420,7 +420,7 @@ void loadFactorySerial() {
   factorySerialValid = at24csReadBytes(AT24CS02_SERIAL_ADDR, 0x00, factorySerial, FACTORY_SERIAL_LEN);
   if (!factorySerialValid) {
     for (uint8_t i = 0; i < FACTORY_SERIAL_LEN; i++) factorySerial[i] = 0;
-    Serial1.println(F("WARN: AT24CS02 factory serial not readable (chip absent on this board?)"));
+    Serial1.println(F("WARN: AT24CS02 serial unreadable"));
   }
 }
 
@@ -473,7 +473,7 @@ void loadHwInfo() {
   const bool readOk = at24csReadBytes(AT24CS02_EEPROM_ADDR, AT24CS02_HWINFO_MEM_ADDR,
                                        reinterpret_cast<uint8_t *>(&hwInfo), sizeof(hwInfo));
   if (!readOk) {
-    Serial1.println(F("WARN: AT24CS02 not responding, hardware info unavailable (chip absent on this board?)"));
+    Serial1.println(F("WARN: AT24CS02 not responding"));
   }
   if (!readOk || hwInfo.crc != hwInfoCrc(hwInfo)) {
     // Either the chip didn't answer, or it answered with blank/garbage
@@ -538,6 +538,9 @@ uint8_t readStatus();
 uint16_t angleDegToRaw12(float deg);
 void brakeMotorA();
 void brakeMotorB();
+void runPeel(bool forward, unsigned long ms);
+extern float targetAngleDeg; // defined with the rest of motion runtime state
+uint8_t commandMoveTo(float target, unsigned long timeoutMs);
 uint16_t readIMonRaw(); // beta1 only - CMD_GET_STATUS's iMonRaw field, defined with the rest of power sequencing
 extern bool relayEngaged; // beta1 only - CMD_GET_STATUS's relayEngaged field, defined with setRelay()
 
@@ -632,6 +635,7 @@ constexpr uint8_t CMD_STOP = 0x31;          // no payload: immediate brake, both
 constexpr uint8_t CMD_IDENTIFY = 0x32;      // payload: [blinkCount] (0 => default) -> CMD_ACK after blinking
 constexpr uint8_t CMD_GET_SERIAL = 0x33;    // -> CMD_SERIAL_INFO / CMD_NACK if the AT24CS02 isn't readable
 constexpr uint8_t CMD_SERIAL_INFO = 0xA3;   // payload: 16 bytes, factory-programmed AT24CS02 serial number
+constexpr uint8_t CMD_PEEL = 0x34;          // payload: [dir(0=fwd,1=rev), duration x10ms (1-255)] -> CMD_ACK after the run / CMD_NACK - v0.01a+, peel motor alone (tape tensioning)
 
 constexpr uint8_t CMD_ACK = 0x82;
 constexpr uint8_t CMD_NACK = 0x83;
@@ -749,7 +753,7 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
     }
     case CMD_SET_INVERT_DIR: {
       if (len < 2 || payload[0] > 1) { sendFrame(CMD_NACK, nullptr, 0); break; }
-      if (payload[0] == 0) invertMotorA = (payload[1] != 0);
+      if (payload[0] == 0) { invertMotorA = (payload[1] != 0); targetAngleDeg = readAngleDeg(); } // angle mirrors with it
       else invertMotorB = (payload[1] != 0);
       sendFrame(CMD_ACK, payload, 2);
       break;
@@ -791,6 +795,12 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
     case CMD_GET_SERIAL: {
       if (!factorySerialValid) { sendFrame(CMD_NACK, nullptr, 0); break; }
       sendFrame(CMD_SERIAL_INFO, factorySerial, FACTORY_SERIAL_LEN);
+      break;
+    }
+    case CMD_PEEL: {
+      if (len < 2 || payload[0] > 1 || payload[1] == 0) { sendFrame(CMD_NACK, nullptr, 0); break; }
+      runPeel(payload[0] == 0, (unsigned long)payload[1] * 10);
+      sendFrame(CMD_ACK, payload, 2);
       break;
     }
     default:
@@ -855,13 +865,17 @@ unsigned long lastHeartbeatMs = 0;
 float lastHeartbeatAngle = 0.0f;
 bool lastHeartbeatAngleValid = false;
 
-bool traceMoveEnabled = true;
+bool traceMoveEnabled = false; // per-150ms move trace - TRACE ON for tuning, off by default so the port stays readable
 unsigned long moveSeq = 0;
 float lastGoodAngleDeg = 0.0f;
 unsigned long i2cErrorCount = 0;
 unsigned long lastI2cErrorLogMs = 0;
 
-String debugLineBuf;
+// Fixed buffer, not String - String pulled in malloc/free/realloc/strtod
+// (~2KB flash) plus heap churn on every received byte.
+constexpr uint8_t DEBUG_LINE_MAX = 40;
+char debugLineBuf[DEBUG_LINE_MAX + 1];
+uint8_t debugLineLen = 0;
 
 // ---------------------------
 // AS5600 helpers (unchanged from TestBench04)
@@ -892,12 +906,12 @@ bool as5600ReadByte(uint8_t reg, uint8_t &out) {
 float readAngleDeg() {
   uint16_t raw;
   if (as5600ReadRaw12(AS5600_REG_ANGLE, raw)) {
+    if (invertMotorA) raw = (4096 - raw) & 0x0FFF; // see invertMotorA - encoder flips with the motor
     lastGoodAngleDeg = (raw * 360.0f) / 4096.0f;
   } else if (millis() - lastI2cErrorLogMs > 500) {
     lastI2cErrorLogMs = millis();
-    Serial1.print(F("WARN: AS5600 I2C read failed ("));
-    Serial1.print(i2cErrorCount);
-    Serial1.println(F(" total), using last known angle"));
+    Serial1.print(F("WARN: AS5600 I2C fail #"));
+    Serial1.println(i2cErrorCount);
   }
   return lastGoodAngleDeg;
 }
@@ -968,6 +982,35 @@ float degForHalfTeeth(uint8_t halfTeeth) { return halfTeeth * DEG_PER_HALF_TOOTH
 float mmForHalfTeeth(uint8_t halfTeeth) { return halfTeeth * (SPROCKET_HOLE_PITCH_MM / 2.0f); }
 
 // ---------------------------
+// DRV8833 sleep (nSLEEP) - the driver sleeps whenever neither motor has
+// been driven for MOTOR_SLEEP_DELAY_MS. Asleep, its outputs are Hi-Z
+// (motors coast, no brake) and it draws ~2uA instead of ~2mA. The delay
+// keeps it awake long enough for the end-of-move brake to actually stop
+// the wheel before it's let go. driveMotorA()/driveMotorB() wake it on
+// demand (tWAKE <= 1ms per datasheet, 2ms used).
+// ---------------------------
+constexpr unsigned long MOTOR_SLEEP_DELAY_MS = 300;
+constexpr unsigned long MOTOR_WAKE_MS = 2;
+
+bool motorsAwake = false;
+unsigned long lastMotorDriveMs = 0;
+
+void motorsWake() {
+  lastMotorDriveMs = millis();
+  if (motorsAwake) return;
+  digitalWrite(PIN_nSLEEP, HIGH);
+  delay(MOTOR_WAKE_MS);
+  motorsAwake = true;
+}
+
+// Called from loop(): puts the driver to sleep once both motors are idle.
+void motorsSleepIfIdle() {
+  if (!motorsAwake || millis() - lastMotorDriveMs < MOTOR_SLEEP_DELAY_MS) return;
+  digitalWrite(PIN_nSLEEP, LOW);
+  motorsAwake = false;
+}
+
+// ---------------------------
 // Motor drive
 // ---------------------------
 void brakeMotorA() {
@@ -977,7 +1020,8 @@ void brakeMotorA() {
 
 void driveMotorA(int duty, bool forward) {
   duty = constrain(duty, 0, 255);
-  const bool effectiveForward = invertMotorA ? !forward : forward;
+  motorsWake();
+  const bool effectiveForward = (MOTOR_A_BASE_INVERT != invertMotorA) ? !forward : forward;
   if (effectiveForward) {
     analogWrite(PIN_AIN1, duty);
     digitalWrite(PIN_AIN2, LOW);
@@ -1001,6 +1045,7 @@ void brakeMotorB() {
 
 void driveMotorB(int duty, bool forward) {
   duty = constrain(duty, 0, 255);
+  motorsWake();
   const bool effectiveForward = invertMotorB ? !forward : forward;
   if (effectiveForward) {
     analogWrite(PIN_BIN1, duty);
@@ -1113,6 +1158,16 @@ uint16_t estimateI5vMilliamps() {
   return (uint16_t)((V_IN_NOMINAL_MV * iInMa) / v5vMv);
 }
 
+// One-line analog readout shared by IMON/5VSTATUS/I5V/SELFTEST.
+void printAnalogReadout() {
+  Serial1.print(F("IMON raw=")); Serial1.print(readIMonRaw());
+  Serial1.print(F(" ")); Serial1.print(readIMonMilliamps());
+  Serial1.print(F("mA | 5V raw=")); Serial1.print(readAdcInternalRef(PIN_5V_READY));
+  Serial1.print(F(" ")); Serial1.print(read5vRailMillivolts());
+  Serial1.print(F("mV | i5v~")); Serial1.print(estimateI5vMilliamps());
+  Serial1.println(F("mA"));
+}
+
 void setRelay(bool engaged) {
   digitalWrite(PIN_485_RELAY, engaged == RELAY_ACTIVE_HIGH ? HIGH : LOW);
   relayEngaged = engaged;
@@ -1134,14 +1189,14 @@ bool waitFor5vStableAndEngageRelay() {
       continue;
     }
     if (millis() - stableSinceMs >= RELAY_READY_STABLE_MS) {
-      Serial1.print(F("5V rail stable (adc="));
+      Serial1.print(F("5V ok (adc="));
       Serial1.print(reading);
-      Serial1.println(F("), RS485 relay engaged."));
+      Serial1.println(F("), bus relay ON"));
       setRelay(true);
       return true;
     }
   }
-  Serial1.println(F("WARN: 5V rail never stabilized within timeout, RS485 relay stays disconnected."));
+  Serial1.println(F("WARN: 5V not stable, bus relay stays OFF"));
   setRelay(false);
   return false;
 }
@@ -1161,10 +1216,29 @@ Adafruit_NeoPixel statusLed(1, PIN_RGB_DATA, NEO_GRB + NEO_KHZ800);
 
 const uint8_t RGB_MAX_BRIGHTNESS = 128; // 0-255, halved for now to reduce current
 
+// Release status colors (v0.01a):
+//   yellow = booting, not ready yet
+//   blue   = ready (booted, magnet detected)
+//   red    = error (no magnet, or DRV8833 fault)
+//   purple = a motor is moving (feed or peel)
+//   white  = IDENTIFY blink
+uint32_t shownLedColor = 0xFFFFFFFFUL; // nothing shown yet - forces the first write
+
+// Skips the write when the color is unchanged - loop() repaints every
+// iteration, and show() blocks with interrupts off for each call.
 void setStatusLedColor(uint8_t r, uint8_t g, uint8_t b) {
-  statusLed.setPixelColor(0, statusLed.Color(r, g, b));
+  const uint32_t c = statusLed.Color(r, g, b);
+  if (c == shownLedColor) return;
+  shownLedColor = c;
+  statusLed.setPixelColor(0, c);
   statusLed.show();
 }
+
+void ledBooting() { setStatusLedColor(255, 255, 0); }
+void ledReady()   { setStatusLedColor(0, 0, 255); }
+void ledError()   { setStatusLedColor(255, 0, 0); }
+void ledMoving()  { setStatusLedColor(160, 0, 255); }
+void ledOff()     { setStatusLedColor(0, 0, 0); }
 
 void showStartupLedSequence() {
   statusLed.setBrightness(RGB_MAX_BRIGHTNESS);
@@ -1174,8 +1248,7 @@ void showStartupLedSequence() {
   delay(250);
   setStatusLedColor(0, 0, 255);
   delay(250);
-  statusLed.clear();
-  statusLed.show();
+  ledOff();
 }
 
 // ---------------------------
@@ -1199,26 +1272,24 @@ constexpr uint8_t SELFTEST_RELAY_CYCLES = 2;
 
 void runDebugSelfTest() {
   for (uint8_t i = 0; i < SELFTEST_RELAY_CYCLES; i++) {
-    Serial1.println(F("Self-test: relay ON"));
+    Serial1.println(F("relay ON"));
     setRelay(true);
     setStatusLedColor(0, 255, 0); // green = relay ON
     delay(SELFTEST_RELAY_HOLD_MS);
 
-    Serial1.println(F("Self-test: relay OFF"));
+    Serial1.println(F("relay OFF"));
     setRelay(false);
     setStatusLedColor(255, 0, 0); // red = relay OFF
     delay(SELFTEST_RELAY_HOLD_MS);
   }
 
-  Serial1.println(F("Self-test: ext LED ON"));
+  Serial1.println(F("ext LED"));
   setExtLed(true);
   setStatusLedColor(0, 0, 255); // blue = testing ext LED
   delay(300);
   setExtLed(false);
-  Serial1.println(F("Self-test: ext LED OFF"));
 
-  statusLed.clear();
-  statusLed.show();
+  ledOff();
   // loop() repaints the RGB to the real magnet-detect red/green on its
   // very next iteration - no need to set that here.
 
@@ -1228,12 +1299,7 @@ void runDebugSelfTest() {
   // right now, so a bench tester can sanity-check both at a glance
   // alongside the relay/LED test above. loadAnalogCal() must have run
   // before this (see its call site in setup()) or these divide by zero.
-  Serial1.print(F("Self-test: IMON cal raw=")); Serial1.print(analogCal.imonCalRaw);
-  Serial1.print(F("=")); Serial1.print(analogCal.imonCalMa); Serial1.print(F("mA, now raw="));
-  Serial1.print(readIMonRaw()); Serial1.print(F(" = ")); Serial1.print(readIMonMilliamps()); Serial1.println(F("mA"));
-  Serial1.print(F("Self-test: 5V_READY cal raw=")); Serial1.print(analogCal.v5vCalRaw);
-  Serial1.print(F("=")); Serial1.print(analogCal.v5vCalMv); Serial1.print(F("mV, now raw="));
-  Serial1.print(readAdcInternalRef(PIN_5V_READY)); Serial1.print(F(" = ")); Serial1.print(read5vRailMillivolts()); Serial1.println(F("mV"));
+  printAnalogReadout();
 }
 
 // CMD_IDENTIFY / debug IDENTIFY: white flashes, distinct from the
@@ -1247,8 +1313,7 @@ void identifyBlink(uint8_t count) {
   for (uint8_t i = 0; i < count; i++) {
     setStatusLedColor(255, 255, 255);
     delay(150);
-    statusLed.clear();
-    statusLed.show();
+    ledOff();
     delay(150);
   }
 }
@@ -1264,6 +1329,75 @@ bool buttonPressed(int pin, unsigned long &lastEdgeMs) {
     }
   }
   return false;
+}
+
+// ---------------------------
+// Peel motor (motor B, open loop - no encoder) run on its own, e.g. to
+// tension the cover tape after loading a reel. Stops early on a DRV8833
+// fault. RGB shows purple while running; loop() repaints status after.
+// ---------------------------
+void runPeel(bool forward, unsigned long ms) {
+  ledMoving();
+  driveMotorB(PEEL_DUTY, forward);
+  const unsigned long start = millis();
+  while (millis() - start < ms && digitalRead(PIN_nFAULT) != LOW) delay(1);
+  brakeMotorB();
+}
+
+// SW1: short press = feed one tooth; hold >= SW1_LONG_PRESS_MS = fast
+// feed, one full sprocket turn (tape loading). Long press fires as soon as
+// the threshold is reached, not on release. Picked over double-press: no
+// wait-for-a-second-press delay on every normal single feed.
+constexpr unsigned long SW1_LONG_PRESS_MS = 700;
+uint8_t fastFeedTurn();
+
+void handleSw1(unsigned long &lastEdgeMs) {
+  const int activeLevel = BUTTONS_ACTIVE_LOW ? LOW : HIGH;
+  if (digitalRead(PIN_SW1) != activeLevel) return;
+  const unsigned long start = millis();
+  if (start - lastEdgeMs < DEBOUNCE_MS) return;
+  delay(DEBOUNCE_MS);
+  if (digitalRead(PIN_SW1) != activeLevel) return; // bounce, not a press
+
+  while (digitalRead(PIN_SW1) == activeLevel && millis() - start < SW1_LONG_PRESS_MS) delay(1);
+  if (digitalRead(PIN_SW1) == activeLevel) {
+    Serial1.println(F("fast feed"));
+    fastFeedTurn();
+    while (digitalRead(PIN_SW1) == activeLevel) delay(1); // one turn per hold
+  } else {
+    targetAngleDeg = normalizeDeg(targetAngleDeg + DEG_PER_TOOTH);
+    commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
+  }
+  lastEdgeMs = millis();
+}
+
+// TODO(button roles): the intended final mapping is SW1 = FEED, SW2 =
+// UNFEED (reverse the feed motor, e.g. back tape out / undo an overfeed).
+// SW2 is peel-while-held below for now, as a stopgap for tensioning. Still
+// to decide before changing it: how peel/tensioning gets triggered once
+// SW2 is taken (auto-tension on FEED? a button combo? a long press?), and
+// how UNFEED interacts with the peel motor (cover tape slackens when tape
+// goes backwards) and with the always-seat-backwards tooth rule.
+// SW2: peel runs forward for as long as the button is held (capped at
+// PEEL_HOLD_MAX_MS), so the operator can tension the tape by feel.
+void peelWhileSw2Held(unsigned long &lastEdgeMs) {
+  const int activeLevel = BUTTONS_ACTIVE_LOW ? LOW : HIGH;
+  if (digitalRead(PIN_SW2) != activeLevel) return;
+  const unsigned long start = millis();
+  if (start - lastEdgeMs < DEBOUNCE_MS) return;
+  delay(DEBOUNCE_MS);
+  if (digitalRead(PIN_SW2) != activeLevel) return; // bounce, not a press
+
+  ledMoving();
+  driveMotorB(PEEL_DUTY, true);
+  while (digitalRead(PIN_SW2) == activeLevel && digitalRead(PIN_nFAULT) != LOW
+         && millis() - start < PEEL_HOLD_MAX_MS) {
+    delay(1);
+  }
+  brakeMotorB();
+  Serial1.print(F("peel ")); Serial1.print(millis() - start); Serial1.println(F("ms"));
+  while (digitalRead(PIN_SW2) == activeLevel) delay(1); // cap hit: wait for release, don't restart
+  lastEdgeMs = millis();
 }
 
 // ---------------------------
@@ -1313,48 +1447,52 @@ void runRelayButtonTest() {
 // ---------------------------
 // Closed-loop move (unchanged from TestBench04, Serial -> Serial1)
 // ---------------------------
-uint8_t moveToAngle(float target, unsigned long timeoutMs) {
+// One result line per move ("move 12 ok 45.00" / "move 12 ERR stall");
+// the per-150ms trace only prints with TRACE ON.
+uint8_t endMove(unsigned long moveId, uint8_t err, float angle) {
+  brakeMotorA();
+  lastMoveError = err;
+  lastHeartbeatAngleValid = false; // the wheel moved on purpose - don't let the heartbeat flag it
+  Serial1.print(F("move ")); Serial1.print(moveId);
+  switch (err) {
+    case ERR_NONE: Serial1.print(F(" ok ")); Serial1.println(angle, 2); break;
+    case ERR_FAULT: Serial1.println(F(" ERR fault")); break;
+    case ERR_MAGNET_LOST: Serial1.println(F(" ERR no magnet")); break;
+    case ERR_STALL: Serial1.println(F(" ERR stall")); break;
+    default: Serial1.println(F(" ERR timeout")); break;
+  }
+  return err;
+}
+
+// passThrough: intermediate hop of a longer move (fastFeedTurn()) - counts
+// as reached once within PASS_THROUGH_DEG and returns WITHOUT braking or
+// printing, so the next hop continues at full speed. Errors still end the
+// move normally.
+constexpr float PASS_THROUGH_DEG = 15.0f;
+
+uint8_t moveToAngle(float target, unsigned long timeoutMs, bool passThrough = false) {
   const unsigned long moveId = ++moveSeq;
   const unsigned long start = millis();
   unsigned long lastMoveMs = millis();
   unsigned long lastTraceMs = 0;
   float lastAngle = readAngleDeg();
 
+  ledMoving();
   if (traceMoveEnabled) {
-    Serial1.print(F("[move "));
-    Serial1.print(moveId);
-    Serial1.print(F("] start="));
-    Serial1.print(lastAngle, 2);
-    Serial1.print(F(" target="));
-    Serial1.println(target, 2);
+    Serial1.print(F("[move ")); Serial1.print(moveId);
+    Serial1.print(F("] ")); Serial1.print(lastAngle, 2);
+    Serial1.print(F(" -> ")); Serial1.println(target, 2);
   }
 
   while (true) {
-    if (digitalRead(PIN_nFAULT) == LOW) {
-      brakeMotorA();
-      Serial1.print(F("[move ")); Serial1.print(moveId);
-      Serial1.println(F("] ERROR: DRV8833 fault asserted, move aborted"));
-      lastMoveError = ERR_FAULT;
-      return ERR_FAULT;
-    }
-    if (!magnetDetected()) {
-      brakeMotorA();
-      Serial1.print(F("[move ")); Serial1.print(moveId);
-      Serial1.println(F("] ERROR: magnet lost during move (MD=0), move aborted"));
-      lastMoveError = ERR_MAGNET_LOST;
-      return ERR_MAGNET_LOST;
-    }
+    if (digitalRead(PIN_nFAULT) == LOW) return endMove(moveId, ERR_FAULT, lastAngle);
+    if (!magnetDetected()) return endMove(moveId, ERR_MAGNET_LOST, lastAngle);
 
     const float current = readAngleDeg();
     const float err = angleErrorDeg(target, current);
 
-    if (fabsf(err) <= ANGLE_TOLERANCE_DEG) {
-      brakeMotorA();
-      Serial1.print(F("[move ")); Serial1.print(moveId);
-      Serial1.print(F("] Reached target: ")); Serial1.println(current, 2);
-      lastMoveError = ERR_NONE;
-      return ERR_NONE;
-    }
+    if (passThrough && fabsf(err) <= PASS_THROUGH_DEG) return ERR_NONE;
+    if (fabsf(err) <= ANGLE_TOLERANCE_DEG) return endMove(moveId, ERR_NONE, current);
 
     const bool forward = err > 0;
     const int duty = (fabsf(err) > CREEP_THRESHOLD_DEG)
@@ -1370,26 +1508,13 @@ uint8_t moveToAngle(float target, unsigned long timeoutMs) {
     if (traceMoveEnabled && millis() - lastTraceMs >= 150) {
       lastTraceMs = millis();
       Serial1.print(F("[move ")); Serial1.print(moveId);
-      Serial1.print(F("] angle=")); Serial1.print(current, 2);
-      Serial1.print(F(" err=")); Serial1.print(err, 2);
-      Serial1.print(F(" duty=")); Serial1.print(duty);
-      Serial1.println(forward ? F(" dir=FWD") : F(" dir=REV"));
+      Serial1.print(F("] a=")); Serial1.print(current, 2);
+      Serial1.print(F(" e=")); Serial1.print(err, 2);
+      Serial1.print(F(" d=")); Serial1.println(forward ? duty : -duty);
     }
 
-    if (millis() - lastMoveMs > STALL_TIMEOUT_MS) {
-      brakeMotorA();
-      Serial1.print(F("[move ")); Serial1.print(moveId);
-      Serial1.println(F("] ERROR: stall detected, move aborted"));
-      lastMoveError = ERR_STALL;
-      return ERR_STALL;
-    }
-    if (millis() - start > timeoutMs) {
-      brakeMotorA();
-      Serial1.print(F("[move ")); Serial1.print(moveId);
-      Serial1.println(F("] ERROR: move timeout, aborted"));
-      lastMoveError = ERR_TIMEOUT;
-      return ERR_TIMEOUT;
-    }
+    if (millis() - lastMoveMs > STALL_TIMEOUT_MS) return endMove(moveId, ERR_STALL, current);
+    if (millis() - start > timeoutMs) return endMove(moveId, ERR_TIMEOUT, current);
 
     delay(5);
   }
@@ -1478,6 +1603,41 @@ uint8_t feedOnePitch(unsigned long timeoutMs) {
   return moveByMm(mmForHalfTeeth(cfg.feedHalfTeeth), timeoutMs);
 }
 
+// Tooth grid: whole teeth counted from the tape zero hole if one is set,
+// else from encoder 0.
+float toothGridOffsetDeg() {
+  return cfg.tapeZeroRaw == TAPE_ZERO_UNSET ? 0.0f : raw12ToAngleDeg(cfg.tapeZeroRaw);
+}
+
+// Seat the wheel on the nearest tooth, ALWAYS approaching BACKWARDS (the
+// tooth at or behind the current angle, never the one ahead) - moving
+// backwards never pushes extra tape forward past the pick point. If
+// already within tolerance of a tooth, stays put.
+uint8_t snapToToothBackward() {
+  const float offset = toothGridOffsetDeg();
+  const float rel = normalizeDeg(readAngleDeg() - offset);
+  float snapped = floorf(rel / DEG_PER_TOOTH) * DEG_PER_TOOTH;
+  if (DEG_PER_TOOTH - (rel - snapped) <= ANGLE_TOLERANCE_DEG) snapped += DEG_PER_TOOTH; // already on the next tooth
+  targetAngleDeg = normalizeDeg(offset + snapped);
+  return commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
+}
+
+// Fast feed: one full sprocket turn forward (TOOTH_COUNT teeth, 160mm) for
+// loading tape. A single 360deg target equals the start angle, so it's
+// run as four 90deg hops - the first three pass through at full speed,
+// only the last one decelerates and settles. Ends on the same tooth it
+// started from.
+uint8_t fastFeedTurn() {
+  const float start = targetAngleDeg;
+  for (uint8_t i = 1; i <= 4; i++) {
+    targetAngleDeg = normalizeDeg(start + i * 90.0f);
+    const uint8_t err = (i < 4) ? moveToAngle(targetAngleDeg, MOVE_TIMEOUT_MS, true)
+                                : moveToAngle(targetAngleDeg, MOVE_TIMEOUT_MS);
+    if (err != ERR_NONE) { targetAngleDeg = readAngleDeg(); return err; }
+  }
+  return ERR_NONE;
+}
+
 // ---------------------------
 // Motor-duty zero-point calibration (unchanged from TestBench04)
 //
@@ -1499,12 +1659,13 @@ bool rampFindBreakaway(bool forward, float baselineDeg, int &stillMaxOut, int &b
 }
 
 void calibrateZero() {
-  Serial1.println(F("Calibrating zero point (still-duty) ..."));
+  Serial1.println(F("duty cal..."));
+  ledMoving();
   brakeMotorA();
   delay(200);
 
   if (!magnetDetected()) {
-    Serial1.println(F("WARN: AS5600 magnet not detected, skipping calibration, using defaults"));
+    Serial1.println(F("WARN: no magnet, duty cal skipped"));
     minMoveDutyFwd = minMoveDutyRev = DEFAULT_MIN_MOVE_DUTY;
     stillDutyMax = DEFAULT_MIN_MOVE_DUTY - CAL_STEP_DUTY;
     return;
@@ -1522,15 +1683,16 @@ void calibrateZero() {
     minMoveDutyFwd = breakFwd + CAL_MARGIN_DUTY;
     minMoveDutyRev = breakRev + CAL_MARGIN_DUTY;
     stillDutyMax = min(stillFwd, stillRev);
-    Serial1.println(F("Calibration OK."));
+    Serial1.print(F("duty cal ok fwd=")); Serial1.print(minMoveDutyFwd);
+    Serial1.print(F(" rev=")); Serial1.println(minMoveDutyRev);
   } else {
-    Serial1.println(F("WARN: calibration incomplete, using defaults"));
+    Serial1.println(F("WARN: duty cal failed, defaults"));
     minMoveDutyFwd = minMoveDutyRev = DEFAULT_MIN_MOVE_DUTY;
     stillDutyMax = DEFAULT_MIN_MOVE_DUTY - CAL_STEP_DUTY;
   }
 
   moveToAngle(startAngle, CAL_RESTORE_TIMEOUT_MS);
-  targetAngleDeg = readAngleDeg();
+  snapToToothBackward(); // seat on a tooth, approaching backwards
 }
 
 // ---------------------------
@@ -1597,322 +1759,239 @@ void checkHoming() {
   if (now - magnetStableSinceMs < HOMING_MAGNET_STABLE_MS) return; // not stable long enough yet
 
   homingDone = true;
-  Serial1.println(F("Magnet stable for HOMING_MAGNET_STABLE_MS - homing now."));
+  Serial1.println(F("magnet stable, homing"));
   calibrateZero();
 }
 
 // ---------------------------
 // Debug port (Serial1): status/help + local component config for bench use
 // ---------------------------
+// Two lines: config/identity, then live hardware state.
 void printStatus() {
   Serial1.print(F("addr="));
-  if (busAddress == ADDR_UNASSIGNED) Serial1.print(F("UNASSIGNED"));
-  else Serial1.print(busAddress);
-  Serial1.print(F(" component="));
-  if (cfg.componentId == COMPONENT_ID_UNSET) Serial1.print(F("UNSET"));
-  else Serial1.print(cfg.componentId);
-  Serial1.print(F(" tapeZero="));
-  if (cfg.tapeZeroRaw == TAPE_ZERO_UNSET) Serial1.print(F("UNSET"));
-  else Serial1.print(cfg.tapeZeroRaw);
-  Serial1.print(F(" pitchMm="));
-  if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) Serial1.print(F("UNSET"));
-  else Serial1.print(mmForHalfTeeth(cfg.feedHalfTeeth), 1);
-  Serial1.print(F(" invertA="));
-  Serial1.print(invertMotorA ? F("Y") : F("N"));
-  Serial1.print(F(" invertB="));
-  Serial1.print(invertMotorB ? F("Y") : F("N"));
-  Serial1.print(F(" tapeWidthMm="));
-  if (hwInfo.tapeWidthMm == TAPE_WIDTH_UNSET) Serial1.print(F("UNSET"));
-  else Serial1.print(hwInfo.tapeWidthMm);
+  if (busAddress == ADDR_UNASSIGNED) Serial1.print('-'); else Serial1.print(busAddress);
+  Serial1.print(F(" comp="));
+  if (cfg.componentId == COMPONENT_ID_UNSET) Serial1.print('-'); else Serial1.print(cfg.componentId);
+  Serial1.print(F(" zero="));
+  if (cfg.tapeZeroRaw == TAPE_ZERO_UNSET) Serial1.print('-'); else Serial1.print(cfg.tapeZeroRaw);
+  Serial1.print(F(" pitch="));
+  if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) Serial1.print('-'); else Serial1.print(mmForHalfTeeth(cfg.feedHalfTeeth), 1);
+  Serial1.print(F("mm width="));
+  if (hwInfo.tapeWidthMm == TAPE_WIDTH_UNSET) Serial1.print('-'); else Serial1.print(hwInfo.tapeWidthMm);
+  Serial1.print(F("mm inv="));
+  Serial1.print(invertMotorA ? 'A' : '-');
+  Serial1.print(invertMotorB ? 'B' : '-');
   Serial1.print(F(" serial="));
-  Serial1.print(factorySerialValid ? F("OK(SERIAL cmd)") : F("UNAVAILABLE"));
-  Serial1.print(F(" relay="));
-  Serial1.print(relayEngaged ? F("CONNECTED") : F("disconnected"));
-  Serial1.print(F(" iMonRaw="));
-  Serial1.print(readIMonRaw());
-  Serial1.print(F(" iMonMa="));
-  Serial1.print(readIMonMilliamps());
-  Serial1.print(F(" i5vEstMa="));
-  Serial1.print(estimateI5vMilliamps());
-  Serial1.print(F(" angle="));
+  Serial1.println(factorySerialValid ? F("ok") : F("n/a"));
+
+  Serial1.print(F("angle="));
   Serial1.print(readAngleDeg(), 2);
   Serial1.print(F(" target="));
   Serial1.print(targetAngleDeg, 2);
-  Serial1.print(F(" | "));
+  Serial1.print(' ');
   printMagnetLine(false);
-  Serial1.print(F(" | i2cErrors="));
-  Serial1.print(i2cErrorCount);
-  Serial1.print(F(" lastMoveErr="));
-  Serial1.println(lastMoveError);
+  Serial1.print(F(" relay="));
+  Serial1.print(relayEngaged ? F("on") : F("off"));
+  Serial1.print(F(" iMon="));
+  Serial1.print(readIMonMilliamps());
+  Serial1.print(F("mA fault="));
+  Serial1.print(digitalRead(PIN_nFAULT) == LOW ? 1 : 0);
+  Serial1.print(F(" lastErr="));
+  Serial1.print(lastMoveError);
+  Serial1.print(F(" i2cErr="));
+  Serial1.println(i2cErrorCount);
 }
 
 void printHelp() {
-  Serial1.println(F("Debug port commands (newline terminated):"));
-  Serial1.println(F("  A<deg> / T<index> / STEP+1 / STEP-1 / STEP+0.5 / STEP-0.5"));
-  Serial1.println(F("  ZERO / STOP / STATUS / TRACE ON / TRACE OFF / HELP"));
-  Serial1.println(F("  LED ON / LED OFF  external LED (A3/PC3) on/off"));
-  Serial1.println(F("  RELAY ON / OFF  force the RS485 bus-connect relay, bench-only override -"));
-  Serial1.println(F("                  bypasses the 5V-stable gate from setup(), does not touch it"));
-  Serial1.println(F("  SELFTEST        re-run the boot self-test on demand: relay x2 (audible"));
-  Serial1.println(F("                  click each way), ext LED, IMON/5V readout - CAUTION: ends"));
-  Serial1.println(F("                  with the relay forced OFF, disconnecting a live bus link"));
-  Serial1.println(F("                  until RELAY ON or a reboot re-engages it"));
-  Serial1.println(F("  (not a typed command) hold SW1 or SW2 while powering up for relay"));
-  Serial1.println(F("                  button-test mode: RGB blue -> red/relay off, then each"));
-  Serial1.println(F("                  button press toggles the relay (green=on/red=off) for as"));
-  Serial1.println(F("                  long as you want - power-cycle without holding to exit"));
-  Serial1.println(F("  IMON            print PIN_I_MON raw ADC + calibrated mA (TPS26600 IMON)"));
-  Serial1.println(F("  5VSTATUS        print PIN_5V_READY raw ADC (internal 1.1V ref) + calibrated"));
-  Serial1.println(F("                  mV + estimated i5v (see I5V) + current relay state"));
-  Serial1.println(F("  I5V             print estimated 5V-rail current (mA) from a 12V-nominal"));
-  Serial1.println(F("                  power balance against IMON - rough, debug only, ignores"));
-  Serial1.println(F("                  buck efficiency (see estimateI5vMilliamps())"));
-  Serial1.println(F("  CALI <mA>       calibrate IMON: capture the current PIN_I_MON raw ADC"));
-  Serial1.println(F("                  reading against a real load current measured with a bench"));
-  Serial1.println(F("                  ammeter right now (e.g. CALI 87.5), persisted in EEPROM"));
-  Serial1.println(F("  CALV <V>        calibrate 5V_READY the same way, against a bench multimeter"));
-  Serial1.println(F("                  reading of the actual 5V rail right now (e.g. CALV 5.02)"));
-  Serial1.println(F("  CALSTATUS       print the stored IMON/5V_READY calibration points"));
-  Serial1.println(F("  CALRESET        reset IMON/5V_READY calibration to the factory-calculated"));
-  Serial1.println(F("                  defaults (undoes CALI/CALV)"));
-  Serial1.println(F("  INVERTA ON/OFF  flip motor A direction (mirrors CMD_SET_INVERT_DIR)"));
-  Serial1.println(F("  INVERTB ON/OFF  flip motor B direction (mirrors CMD_SET_INVERT_DIR)"));
-  Serial1.println(F("  IDENTIFY [n]    blink status LED white n times (default 3), mirrors"));
-  Serial1.println(F("                  CMD_IDENTIFY - find which physical unit an address is"));
-  Serial1.println(F("  SETWIDTH <mm>   set this unit's tape width (8/12/16/24/32/44/56),"));
-  Serial1.println(F("                  assembly/bench-time only - not reset by anything else,"));
-  Serial1.println(F("                  mirrors CMD_SET_HW_INFO"));
-  Serial1.println(F("  SERIAL          print the AT24CS02's factory-programmed 128-bit serial"));
-  Serial1.println(F("                  number as hex, mirrors CMD_GET_SERIAL"));
-  Serial1.println(F("  WHOAMI          print bus address + loaded component config"));
-  Serial1.println(F("  SIMADDR <n>     force bus address n locally (1-247), bench-only,"));
-  Serial1.println(F("                  bypasses CMD_DISCOVER/CMD_ASSIGN_ADDR - for testing"));
-  Serial1.println(F("                  motion/config commands without a host on the bus yet"));
-  Serial1.println(F("  COMPONENT <id>  set loaded component id (mirrors CMD_SET_COMPONENT);"));
-  Serial1.println(F("                  resets tape zero + pitch if id actually changed"));
-  Serial1.println(F("  --- tape zero / pitch calibration ---"));
-  Serial1.println(F("  ZEROHERE        jog with STEP/T/buttons (whole/half-tooth, no camera"));
-  Serial1.println(F("                  needed) so the first pocket's sprocket hole is seated,"));
-  Serial1.println(F("                  then run this - PICK_OFFSET_MM (fixed, same on every"));
-  Serial1.println(F("                  feeder) is added automatically at move time, not here"));
-  Serial1.println(F("  PITCH <mm>      set per-pick feed distance in mm (e.g. PITCH 4 for"));
-  Serial1.println(F("                  standard EIA-481, PITCH 2 for fine pitch, PITCH 8/12/16/24"));
-  Serial1.println(F("                  for wider multi-hole reels) - auto-translated to steps"));
-  Serial1.println(F("  RESETCFG        clear tape zero + pitch only (keeps component id)"));
-  Serial1.println(F("  --- distance-based motion (mm, not degrees/teeth) ---"));
-  Serial1.println(F("  GOTOZERO        move to the calibrated pick point (tape zero + PICK_OFFSET_MM)"));
-  Serial1.println(F("  GOMM <mm>       move to tape zero + PICK_OFFSET_MM + mm (absolute)"));
-  Serial1.println(F("  MOVEMM <mm>     move by mm relative to current position - only needed"));
-  Serial1.println(F("                  routinely to (re-)measure PICK_OFFSET_MM itself with a"));
-  Serial1.println(F("                  camera on a reference unit, not per-reel anymore"));
-  Serial1.println(F("  FEED            advance by the configured PITCH (next pocket)"));
-  Serial1.println(F("  --- low-level bus commands, for reference (see project.md) ---"));
-  Serial1.println(F("  FEEDCFG <zeroRaw 0-4095> <halfTeeth 1-255>  set both fields directly,"));
-  Serial1.println(F("                  same values CMD_SET_FEED_CONFIG takes over the bus"));
+  Serial1.println(F(
+    "Buttons: SW1=feed 1 tooth, SW1 hold=fast feed 1 turn, SW2 hold=peel\n"
+    "Move : STEP <teeth> | T<n> | A<deg> | MOVEMM <mm> | FEED | FASTFEED | SNAP | GOTOZERO | GOMM <mm> | STOP\n"
+    "Peel : PEEL <ms>  (negative = reverse, max 5000)\n"
+    "Tape : ZEROHERE | PITCH <mm> | COMPONENT <id> | FEEDCFG <raw> <halfTeeth> | RESETCFG\n"
+    "Setup: ZERO | INVERTA ON|OFF | INVERTB ON|OFF | SETWIDTH <mm> | SIMADDR <n>\n"
+    "Power: IMON | 5VSTATUS | I5V | RELAY ON|OFF | CALI <mA> | CALV <V> | CALSTATUS | CALRESET\n"
+    "Info : STATUS | SERIAL | SELFTEST | IDENTIFY [n] | LED ON|OFF | TRACE ON|OFF | HELP"));
 }
 
-void handleDebugLine(String line) {
-  line.trim();
-  if (line.length() == 0) return;
-  String upper = line; upper.toUpperCase();
+// Minimal number parser (sign, digits, optional fraction) - atof()/strtod
+// alone would cost ~700 bytes of flash.
+float parseNum(const char *p) {
+  while (*p == ' ') p++;
+  bool neg = false;
+  if (*p == '-' || *p == '+') neg = (*p++ == '-');
+  float v = 0.0f;
+  while (*p >= '0' && *p <= '9') v = v * 10.0f + (*p++ - '0');
+  if (*p == '.') {
+    p++;
+    float scale = 0.1f;
+    while (*p >= '0' && *p <= '9') { v += (*p++ - '0') * scale; scale *= 0.1f; }
+  }
+  return neg ? -v : v;
+}
 
-  if (upper == "STATUS") { printStatus(); return; }
-  if (upper == "ZERO") { calibrateZero(); return; }
-  if (upper == "STOP") { brakeMotorA(); brakeMotorB(); Serial1.println(F("Stopped.")); return; }
-  if (upper == "LED ON") { setExtLed(true); Serial1.println(F("External LED ON.")); return; }
-  if (upper == "LED OFF") { setExtLed(false); Serial1.println(F("External LED OFF.")); return; }
-  if (upper == "RELAY ON") { setRelay(true); Serial1.println(F("RS485 relay forced CONNECTED (bench override).")); return; }
-  if (upper == "RELAY OFF") { setRelay(false); Serial1.println(F("RS485 relay forced disconnected (bench override).")); return; }
-  if (upper == "SELFTEST") {
-    Serial1.println(F("Running self-test (relay x2, ext LED, IMON/5V readout)..."));
-    runDebugSelfTest();
-    Serial1.println(F("Self-test done."));
+long parseInt(const char *p) { return lround(parseNum(p)); }
+
+// Returns the text after `prefix` if `line` starts with it, else nullptr.
+const char *afterPrefix(const char *line, PGM_P prefix) {
+  const size_t n = strlen_P(prefix);
+  return strncmp_P(line, prefix, n) == 0 ? line + n : nullptr;
+}
+
+#define CMD_IS(s) (strcmp_P(line, PSTR(s)) == 0)
+#define CMD_ARG(s) afterPrefix(line, PSTR(s))
+
+void printOk() { Serial1.println(F("ok")); }
+
+// `line` is already trimmed and upper-cased by the caller.
+void handleDebugLine(const char *line) {
+  const char *arg = nullptr;
+
+  if (CMD_IS("STATUS") || CMD_IS("WHOAMI")) { printStatus(); return; }
+  if (CMD_IS("HELP") || CMD_IS("?")) { printHelp(); return; }
+  if (CMD_IS("ZERO")) { calibrateZero(); return; }
+  if (CMD_IS("STOP")) { brakeMotorA(); brakeMotorB(); printOk(); return; }
+  if (CMD_IS("LED ON")) { setExtLed(true); printOk(); return; }
+  if (CMD_IS("LED OFF")) { setExtLed(false); printOk(); return; }
+  if (CMD_IS("RELAY ON")) { setRelay(true); printOk(); return; }
+  if (CMD_IS("RELAY OFF")) { setRelay(false); printOk(); return; }
+  if (CMD_IS("TRACE ON")) { traceMoveEnabled = true; printOk(); return; }
+  if (CMD_IS("TRACE OFF")) { traceMoveEnabled = false; printOk(); return; }
+  if (CMD_IS("INVERTA ON")) { invertMotorA = true; targetAngleDeg = readAngleDeg(); printOk(); return; }
+  if (CMD_IS("INVERTA OFF")) { invertMotorA = false; targetAngleDeg = readAngleDeg(); printOk(); return; }
+  if (CMD_IS("SNAP")) { snapToToothBackward(); return; }
+  if (CMD_IS("FASTFEED")) { fastFeedTurn(); return; }
+  if (CMD_IS("INVERTB ON")) { invertMotorB = true; printOk(); return; }
+  if (CMD_IS("INVERTB OFF")) { invertMotorB = false; printOk(); return; }
+  if (CMD_IS("SELFTEST")) {
+    runDebugSelfTest(); // ends with the relay OFF - RELAY ON or reboot to rejoin the bus
+    Serial1.println(F("selftest done, relay OFF"));
     return;
   }
-  if (upper == "IMON") {
-    Serial1.print(F("I_MON raw=")); Serial1.print(readIMonRaw());
-    Serial1.print(F(" mA=")); Serial1.println(readIMonMilliamps());
-    return;
-  }
-  if (upper == "5VSTATUS") {
-    Serial1.print(F("5V_READY raw (internal 1.1V ref)="));
-    Serial1.print(readAdcInternalRef(PIN_5V_READY));
-    Serial1.print(F(" mV=")); Serial1.print(read5vRailMillivolts());
-    Serial1.print(F(" i5vEstMa=")); Serial1.print(estimateI5vMilliamps());
-    Serial1.print(F(" relay="));
-    Serial1.println(relayEngaged ? F("CONNECTED") : F("disconnected"));
-    return;
-  }
-  if (upper == "I5V") {
-    Serial1.print(F("i5vEst=")); Serial1.print(estimateI5vMilliamps());
-    Serial1.println(F("mA (rough power-balance estimate, see HELP)"));
-    return;
-  }
-  if (upper.startsWith("CALI ")) {
-    const float ma = upper.substring(5).toFloat();
-    if (ma <= 0) { Serial1.println(F("Refused: CALI needs a positive measured mA (e.g. CALI 87.5).")); return; }
+  if (CMD_IS("IMON") || CMD_IS("5VSTATUS") || CMD_IS("I5V")) { printAnalogReadout(); return; }
+  if ((arg = CMD_ARG("CALI "))) {
+    const float ma = parseNum(arg);
     const uint16_t raw = readIMonRaw();
-    if (raw == 0) { Serial1.println(F("Refused: PIN_I_MON reads 0 raw right now, can't calibrate against it.")); return; }
+    if (ma <= 0 || raw == 0) { Serial1.println(F("ERR: need mA>0 and IMON raw>0")); return; }
     analogCal.imonCalRaw = raw;
     analogCal.imonCalMa = (uint16_t)(ma + 0.5f);
     saveAnalogCal();
-    Serial1.print(F("IMON calibrated: raw=")); Serial1.print(analogCal.imonCalRaw);
-    Serial1.print(F(" = ")); Serial1.print(analogCal.imonCalMa); Serial1.println(F("mA"));
+    printOk();
     return;
   }
-  if (upper.startsWith("CALV ")) {
-    const float v = upper.substring(5).toFloat();
-    if (v <= 0) { Serial1.println(F("Refused: CALV needs a positive measured volts value (e.g. CALV 5.02).")); return; }
+  if ((arg = CMD_ARG("CALV "))) {
+    const float v = parseNum(arg);
     const uint16_t raw = readAdcInternalRef(PIN_5V_READY);
-    if (raw == 0) { Serial1.println(F("Refused: PIN_5V_READY reads 0 raw right now, can't calibrate against it.")); return; }
+    if (v <= 0 || raw == 0) { Serial1.println(F("ERR: need V>0 and 5V raw>0")); return; }
     analogCal.v5vCalRaw = raw;
     analogCal.v5vCalMv = (uint16_t)(v * 1000.0f + 0.5f);
     saveAnalogCal();
-    Serial1.print(F("5V_READY calibrated: raw=")); Serial1.print(analogCal.v5vCalRaw);
-    Serial1.print(F(" = ")); Serial1.print(analogCal.v5vCalMv); Serial1.println(F("mV"));
+    printOk();
     return;
   }
-  if (upper == "CALSTATUS") {
-    Serial1.print(F("IMON: raw=")); Serial1.print(analogCal.imonCalRaw);
-    Serial1.print(F(" = ")); Serial1.print(analogCal.imonCalMa); Serial1.println(F("mA"));
-    Serial1.print(F("5V_READY: raw=")); Serial1.print(analogCal.v5vCalRaw);
-    Serial1.print(F(" = ")); Serial1.print(analogCal.v5vCalMv); Serial1.println(F("mV"));
+  if (CMD_IS("CALSTATUS")) {
+    Serial1.print(F("cal IMON ")); Serial1.print(analogCal.imonCalRaw);
+    Serial1.print('='); Serial1.print(analogCal.imonCalMa);
+    Serial1.print(F("mA, 5V ")); Serial1.print(analogCal.v5vCalRaw);
+    Serial1.print('='); Serial1.print(analogCal.v5vCalMv); Serial1.println(F("mV"));
     return;
   }
-  if (upper == "CALRESET") {
-    resetAnalogCalToFactoryDefaults();
-    saveAnalogCal();
-    Serial1.println(F("IMON/5V_READY calibration reset to factory-calculated defaults."));
+  if (CMD_IS("CALRESET")) { resetAnalogCalToFactoryDefaults(); saveAnalogCal(); printOk(); return; }
+  if (CMD_IS("IDENTIFY") || (arg = CMD_ARG("IDENTIFY "))) {
+    const long n = arg ? parseInt(arg) : 0;
+    identifyBlink(n > 0 && n < 256 ? (uint8_t)n : 3);
     return;
   }
-  if (upper == "INVERTA ON") { invertMotorA = true; Serial1.println(F("Motor A direction inverted.")); return; }
-  if (upper == "INVERTA OFF") { invertMotorA = false; Serial1.println(F("Motor A direction normal.")); return; }
-  if (upper == "INVERTB ON") { invertMotorB = true; Serial1.println(F("Motor B direction inverted.")); return; }
-  if (upper == "INVERTB OFF") { invertMotorB = false; Serial1.println(F("Motor B direction normal.")); return; }
-  if (upper == "IDENTIFY" || upper.startsWith("IDENTIFY ")) {
-    const int n = upper.length() > 8 ? upper.substring(9).toInt() : 0;
-    identifyBlink(n > 0 ? (uint8_t)n : 3);
+  if ((arg = CMD_ARG("SETWIDTH "))) {
+    if (setTapeWidthMm((uint8_t)parseInt(arg))) printOk();
+    else Serial1.println(F("ERR: 8/12/16/24/32/44/56 only, or AT24CS02 absent"));
     return;
   }
-  if (upper.startsWith("SETWIDTH ")) {
-    const int mm = upper.substring(9).toInt();
-    if (!setTapeWidthMm((uint8_t)mm)) {
-      Serial1.println(F("Refused: width must be 8/12/16/24/32/44/56, or AT24CS02 write failed (chip absent?)."));
-    } else {
-      Serial1.print(F("Tape width set: ")); Serial1.print(mm); Serial1.println(F("mm"));
+  if (CMD_IS("SERIAL")) {
+    if (!factorySerialValid) { Serial1.println(F("serial n/a")); return; }
+    for (uint8_t i = 0; i < FACTORY_SERIAL_LEN; i++) {
+      if (factorySerial[i] < 0x10) Serial1.print('0');
+      Serial1.print(factorySerial[i], HEX);
     }
+    Serial1.println();
     return;
   }
-  if (upper == "SERIAL") {
-    if (!factorySerialValid) {
-      Serial1.println(F("AT24CS02 factory serial unavailable (chip absent on this board?)."));
-    } else {
-      Serial1.print(F("Serial: "));
-      for (uint8_t i = 0; i < FACTORY_SERIAL_LEN; i++) {
-        if (factorySerial[i] < 0x10) Serial1.print('0');
-        Serial1.print(factorySerial[i], HEX);
-      }
-      Serial1.println();
-    }
+  if ((arg = CMD_ARG("SIMADDR "))) {
+    const long n = parseInt(arg);
+    if (n < ADDR_MIN || n > ADDR_MAX) { Serial1.println(F("ERR: 1-247")); return; }
+    busAddress = (uint8_t)n;
+    printOk();
     return;
   }
-  if (upper == "HELP" || upper == "?") { printHelp(); return; }
-  if (upper == "TRACE ON") { traceMoveEnabled = true; return; }
-  if (upper == "TRACE OFF") { traceMoveEnabled = false; return; }
-  if (upper == "WHOAMI") { printStatus(); return; }
-  if (upper.startsWith("SIMADDR ")) {
-    const int n = upper.substring(8).toInt();
-    if (n < ADDR_MIN || n > ADDR_MAX) {
-      Serial1.println(F("Refused: address must be 1-247."));
-    } else {
-      busAddress = (uint8_t)n;
-      Serial1.print(F("Bench-only address forced: ")); Serial1.println(n);
-    }
+  if ((arg = CMD_ARG("COMPONENT "))) {
+    const long id = parseInt(arg);
+    if (id < 0 || id > 65534) { Serial1.println(F("ERR: 0-65534")); return; }
+    setComponentId((uint16_t)id);
+    printOk();
     return;
   }
-  if (upper.startsWith("COMPONENT ")) {
-    const long id = upper.substring(10).toInt();
-    if (id < 0 || id > 65534) {
-      Serial1.println(F("Refused: component id must be 0-65534."));
-    } else {
-      setComponentId((uint16_t)id);
-      Serial1.print(F("Component set: ")); Serial1.println(id);
-    }
+  if ((arg = CMD_ARG("FEEDCFG "))) {
+    const char *sep = strchr(arg, ' ');
+    const long zero = parseInt(arg);
+    const long half = sep ? parseInt(sep) : 0;
+    if (zero < 0 || zero > 4095 || half < 1 || half > 255) { Serial1.println(F("ERR: FEEDCFG <0-4095> <1-255>")); return; }
+    setFeedConfig((uint16_t)zero, (uint8_t)half);
+    printOk();
     return;
   }
-  if (upper.startsWith("FEEDCFG ")) {
-    const String rest = upper.substring(8);
-    const int sep = rest.indexOf(' ');
-    if (sep < 0) { Serial1.println(F("Usage: FEEDCFG <zeroRaw 0-4095> <halfTeeth 1-255>")); return; }
-    const long zero = rest.substring(0, sep).toInt();
-    const long half = rest.substring(sep + 1).toInt();
-    if (zero < 0 || zero > 4095 || half < 1 || half > 255) {
-      Serial1.println(F("Refused: zeroRaw 0-4095, halfTeeth 1-255."));
-    } else {
-      setFeedConfig((uint16_t)zero, (uint8_t)half);
-      Serial1.println(F("Feed config saved."));
-    }
-    return;
-  }
-  if (upper == "RESETCFG") { manualResetFeedConfig(); Serial1.println(F("Feed config reset.")); return; }
-  if (upper == "ZEROHERE") {
+  if (CMD_IS("RESETCFG")) { manualResetFeedConfig(); printOk(); return; }
+  if (CMD_IS("ZEROHERE")) {
     setTapeZeroHere();
-    Serial1.print(F("Tape zero set at raw=")); Serial1.println(cfg.tapeZeroRaw);
+    Serial1.print(F("zero=")); Serial1.println(cfg.tapeZeroRaw);
     return;
   }
-  if (upper.startsWith("PITCH ")) {
-    const float mm = upper.substring(6).toFloat();
-    if (mm <= 0) {
-      Serial1.println(F("Refused: pitch must be a positive mm value (e.g. PITCH 4)."));
-    } else {
-      setFeedPitchMm(mm);
-      Serial1.print(F("Pitch set: ")); Serial1.print(mm);
-      Serial1.print(F("mm -> feedHalfTeeth=")); Serial1.println(cfg.feedHalfTeeth);
-    }
+  if ((arg = CMD_ARG("PITCH "))) {
+    const float mm = parseNum(arg);
+    if (mm <= 0) { Serial1.println(F("ERR: mm>0")); return; }
+    setFeedPitchMm(mm);
+    Serial1.print(F("halfTeeth=")); Serial1.println(cfg.feedHalfTeeth);
     return;
   }
-  if (upper == "GOTOZERO") {
-    if (cfg.tapeZeroRaw == TAPE_ZERO_UNSET) {
-      Serial1.println(F("Refused: tape zero not set, run ZEROHERE first."));
-    } else {
-      moveToTapeZeroPlusMm(0.0f, MOVE_TIMEOUT_MS);
-    }
+  if ((arg = CMD_ARG("PEEL "))) {
+    const long ms = parseInt(arg);
+    const unsigned long dur = (unsigned long)labs(ms);
+    if (dur == 0 || dur > PEEL_CMD_MAX_MS) { Serial1.println(F("ERR: PEEL <1-5000> (neg=rev)")); return; }
+    runPeel(ms > 0, dur);
+    printOk();
     return;
   }
-  if (upper.startsWith("GOMM ")) {
-    moveToTapeZeroPlusMm(upper.substring(5).toFloat(), MOVE_TIMEOUT_MS);
+  if (CMD_IS("GOTOZERO")) {
+    if (cfg.tapeZeroRaw == TAPE_ZERO_UNSET) { Serial1.println(F("ERR: no zero, ZEROHERE first")); return; }
+    moveToTapeZeroPlusMm(0.0f, MOVE_TIMEOUT_MS);
     return;
   }
-  if (upper.startsWith("MOVEMM ")) {
-    moveByMm(upper.substring(7).toFloat(), MOVE_TIMEOUT_MS);
+  if ((arg = CMD_ARG("GOMM "))) {
+    if (cfg.tapeZeroRaw == TAPE_ZERO_UNSET) { Serial1.println(F("ERR: no zero, ZEROHERE first")); return; }
+    moveToTapeZeroPlusMm(parseNum(arg), MOVE_TIMEOUT_MS);
     return;
   }
-  if (upper == "FEED") {
-    if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) {
-      Serial1.println(F("Refused: feedHalfTeeth not configured, run PITCH first."));
-    } else {
-      feedOnePitch(MOVE_TIMEOUT_MS);
-    }
+  if ((arg = CMD_ARG("MOVEMM "))) { moveByMm(parseNum(arg), MOVE_TIMEOUT_MS); return; }
+  if (CMD_IS("FEED")) {
+    if (feedOnePitch(MOVE_TIMEOUT_MS) == ERR_NOT_READY) Serial1.println(F("ERR: no pitch, PITCH first"));
     return;
   }
-  if (upper.startsWith("STEP")) {
-    targetAngleDeg = normalizeDeg(targetAngleDeg + upper.substring(4).toFloat() * DEG_PER_TOOTH);
+  if ((arg = CMD_ARG("STEP"))) {
+    targetAngleDeg = normalizeDeg(targetAngleDeg + parseNum(arg) * DEG_PER_TOOTH);
     commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
     return;
   }
-  if (upper.startsWith("T")) {
-    int idx = upper.substring(1).toInt();
+  if ((arg = CMD_ARG("T"))) {
+    long idx = parseInt(arg);
     idx = ((idx % TOOTH_COUNT) + TOOTH_COUNT) % TOOTH_COUNT;
     targetAngleDeg = idx * DEG_PER_TOOTH;
     commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
     return;
   }
-  if (upper.startsWith("A")) {
-    targetAngleDeg = normalizeDeg(upper.substring(1).toFloat());
+  if ((arg = CMD_ARG("A"))) {
+    targetAngleDeg = normalizeDeg(parseNum(arg));
     commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
     return;
   }
-  Serial1.println(F("Unknown command. Type HELP."));
+  Serial1.println(F("? (HELP)"));
 }
 
 // ---------------------------
@@ -1954,15 +2033,15 @@ void setup() {
   // in the same sense as SELFTEST/the relay button-test, but it's the
   // same category of "boot behavior that doesn't mean anything" this
   // release is meant to drop. Solid yellow instead - "booting, not
-  // ready yet" - until loop() overwrites it with the real magnet-detect
-  // green/red on its very first iteration once boot actually completes.
+  // ready yet" - until loop() overwrites it with the real status
+  // (blue ready / red error) on its very first iteration.
   // showStartupLedSequence();
   statusLed.setBrightness(RGB_MAX_BRIGHTNESS);
-  setStatusLedColor(255, 255, 0); // yellow - booting, not ready
+  ledBooting();
 
   brakeMotorA();
   lockMotorBOff();
-  digitalWrite(PIN_nSLEEP, HIGH); // wake DRV8833
+  digitalWrite(PIN_nSLEEP, LOW); // DRV8833 starts asleep - driveMotorA()/B() wake it on demand
 
   Wire.begin();
   Wire.setClock(I2C_CLOCK_HZ);
@@ -1983,48 +2062,35 @@ void setup() {
   loadHwInfo(); // tape width etc - set once at assembly, never reset by config changes
   loadFactorySerial(); // AT24CS02 identification page - read fresh every boot, never cached to EEPROM
 
-  Serial1.println(F("v0.01a feeder firmware ready"));
-  printStatus();
-
-  if (!magnetDetected()) {
-    Serial1.println(F("WARN: AS5600 magnet not detected at startup - homing deferred until one is."));
-  }
-
   targetAngleDeg = readAngleDeg();
   // Homing (calibrateZero()) is intentionally NOT called here - see
-  // checkHoming() in loop(), which it's deferred to: a boot-settle/
-  // stagger delay plus a magnet-placement stability check both have to
-  // pass first, and neither should block the debug port or RS485 bus
-  // from responding while they elapse.
-  printHelp();
+  // checkHoming() in loop(): a boot-settle/stagger delay plus a
+  // magnet-placement stability check both have to pass first, and neither
+  // should block the debug port or RS485 bus from responding meanwhile.
+
+  Serial1.println(F("v0.01a ready - HELP for commands"));
   printStatus();
+  if (!magnetDetected()) Serial1.println(F("WARN: no magnet - homing deferred"));
 }
 
 void loop() {
   const unsigned long now = millis();
+  const bool magnet = magnetDetected();
 
-  // Alpha hardware bring-up: RGB shows AS5600 magnet-detect status instead
-  // of staying off - green = magnet seen, red = not. Not a real feature.
-  if (magnetDetected()) {
-    setStatusLedColor(0, 255, 0);
-  } else {
-    setStatusLedColor(255, 0, 0);
-  }
+  // Status RGB: blue = ready, red = error (no magnet / driver fault).
+  // Purple (moving) is set inside the move/peel functions themselves and
+  // gets repainted here on the next iteration once they return.
+  if (magnet && digitalRead(PIN_nFAULT) != LOW) ledReady();
+  else ledError();
 
   if (now - lastHeartbeatMs >= 3000) {
     lastHeartbeatMs = now;
-    // Without a magnet, the AS5600 still ACKs over I2C and readAngleDeg()
-    // still returns *something*, but it's just noise with no real
-    // magnetic field to lock onto - comparing it across heartbeats would
-    // just be comparing noise to noise and firing false "wheel moved"
-    // warnings. Skip the check entirely, and drop the baseline
-    // (lastHeartbeatAngleValid = false) so that once a magnet reappears,
-    // the next heartbeat starts a fresh comparison instead of comparing
-    // a real angle against whatever noise was captured before.
-    if (magnetDetected()) {
+    // Without a magnet the AS5600 angle is noise - skip the check and drop
+    // the baseline so the next real reading starts a fresh comparison.
+    if (magnet) {
       const float angleNow = readAngleDeg();
       if (lastHeartbeatAngleValid && fabsf(angleErrorDeg(angleNow, lastHeartbeatAngle)) > 1.0f) {
-        Serial1.println(F("WARN: wheel moved between heartbeats with no move in progress"));
+        Serial1.println(F("WARN: wheel moved while idle"));
       }
       lastHeartbeatAngle = angleNow;
       lastHeartbeatAngleValid = true;
@@ -2035,10 +2101,11 @@ void loop() {
 
   if (digitalRead(PIN_nFAULT) == LOW) {
     brakeMotorA();
+    brakeMotorB();
     digitalWrite(PIN_FAULT_LED, HIGH);
-    if (now - lastFaultLogMs >= 500) {
+    if (now - lastFaultLogMs >= 2000) {
       lastFaultLogMs = now;
-      Serial1.println(F("FAULT asserted on DRV8833 -> motor A braked"));
+      Serial1.println(F("FAULT: DRV8833 nFAULT, motors braked"));
     }
     return;
   }
@@ -2046,25 +2113,23 @@ void loop() {
 
   checkHoming(); // no-op once homingDone; see its own comment for the boot-delay/stagger + magnet-stability gate
 
-  if (buttonPressed(PIN_SW1, lastSw1EdgeMs)) {
-    targetAngleDeg = normalizeDeg(targetAngleDeg + DEG_PER_TOOTH);
-    commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
-  }
-  if (buttonPressed(PIN_SW2, lastSw2EdgeMs)) {
-    Serial1.println(F("SW2: jogging motor B (open-loop, no encoder on this motor)"));
-    driveMotorB(JOG_DUTY, true);
-    delay(JOG_DURATION_MS);
-    brakeMotorB();
-  }
+  handleSw1(lastSw1EdgeMs);
+  peelWhileSw2Held(lastSw2EdgeMs);
+  motorsSleepIfIdle();
 
   rs485Poll();
 
   while (Serial1.available()) {
-    char c = Serial1.read();
+    const char c = toupper(Serial1.read());
     if (c == '\n' || c == '\r') {
-      if (debugLineBuf.length() > 0) { handleDebugLine(debugLineBuf); debugLineBuf = ""; }
-    } else {
-      debugLineBuf += c;
+      while (debugLineLen > 0 && debugLineBuf[debugLineLen - 1] == ' ') debugLineLen--;
+      if (debugLineLen > 0) {
+        debugLineBuf[debugLineLen] = '\0';
+        handleDebugLine(debugLineBuf);
+        debugLineLen = 0;
+      }
+    } else if ((c != ' ' || debugLineLen > 0) && debugLineLen < DEBUG_LINE_MAX) {
+      debugLineBuf[debugLineLen++] = c; // leading spaces dropped, overlong lines truncated
     }
   }
 }

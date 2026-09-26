@@ -14,6 +14,14 @@ codes): **`PROTOCOL.md`**.
 command set as `beta1` throughout this doc, except `SELFTEST` and the
 SW1/SW2-held-at-boot relay button-test mode aren't run automatically on
 every boot anymore (both still work on demand, see their entries below).
+v0.01a also adds `PEEL <ms>` (peel motor alone, negative = reverse),
+makes SW2 run the peel motor for as long as it's held, SW1 held >=700ms
+= fast feed (one full sprocket turn, also `FASTFEED`), `SNAP` = seat on
+the nearest tooth approaching backwards, prints short
+`ok`/`ERR: ...` replies instead of long sentences, and has `TRACE` off by
+default (one `move N ok <angle>` / `move N ERR <why>` line per move).
+Status RGB on v0.01a: yellow = booting, blue = ready, red = error (no
+magnet / driver fault), purple = motor moving, white = IDENTIFY.
 
 ## Bring-up / status
 
@@ -120,6 +128,7 @@ after it) plus its own debug-only `RS485ECHO` transport test mode.
 | `CMD_STOP` | `0x31` | **alpha02+** — — | `CMD_ACK` |
 | `CMD_IDENTIFY` | `0x32` | **alpha02+** — `[blinkCount]` (0⇒3) | `CMD_ACK` (after blinking) |
 | `CMD_GET_SERIAL` | `0x33` | **alpha03+** — — | `CMD_SERIAL_INFO` (`0xA3`): 16 bytes, or `CMD_NACK` if the AT24CS02 didn't respond |
+| `CMD_PEEL` | `0x34` | **v0.01a+** — `[dir(0=fwd,1=rev), duration×10ms]` | `CMD_ACK` (after the run) / `CMD_NACK` |
 
 `CMD_ACK` = `0x82`, `CMD_NACK` = `0x83`. Error codes (in `CMD_NACK`
 payloads and `CMD_STATUS_INFO`'s `lastMoveErr`): `0x00` none, `0x01` fault,

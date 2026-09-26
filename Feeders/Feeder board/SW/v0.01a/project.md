@@ -50,6 +50,63 @@ itself.
    stripping it out — the code is correct, it's just waiting on the
    matching hardware fix to actually read anything meaningful.
 
+5. **Status RGB now means something.** Yellow = booting, **blue** =
+   ready (magnet detected, no driver fault), **red** = error (no magnet
+   or DRV8833 fault), **purple** = a motor is moving (feed move, duty
+   calibration/homing, or peel), white = `IDENTIFY`. The LED is only
+   rewritten when the color actually changes.
+6. **Peel motor can run on its own** (to tension the cover tape):
+   - **SW2** now runs it forward *for as long as the button is held*
+     (was a fixed 300ms burst per press), capped at `PEEL_HOLD_MAX_MS`
+     (10s).
+   - **`PEEL <ms>`** debug command, 1–5000ms, negative = reverse.
+   - **`CMD_PEEL` (`0x34`)** bus command, `[dir, duration×10ms]`.
+   All three stop early on a DRV8833 fault. SW1 is unchanged: one tooth
+   forward on the feed motor, closed loop (needs the magnet).
+7. **Debug output trimmed.** `TRACE` is off by default (one
+   `move N ok <angle>` / `move N ERR <why>` line per move; `TRACE ON`
+   brings back the 150ms trace), `STATUS` is two compact lines, commands
+   reply `ok` / `ERR: ...`, `HELP` is a 7-line summary, and boot prints
+   one banner + status instead of help + status twice. `IMON`,
+   `5VSTATUS` and `I5V` all print the same one-line analog readout.
+8. **Flash 97% -> 66%, RAM 50% -> 37%.** Debug line parsing no longer
+   uses `String` (fixed `char` buffer + `strcmp_P`, own number parser
+   instead of `toFloat()`/`strtod`), which dropped malloc/free/realloc/
+   strtod and the RAM copies of every command-name literal. The
+   `platformio.ini` also had `board_hardware.uart = uart0`, which on
+   MiniCore means "a bootloader is installed": 512B reserved and
+   **BOOTRST burned** so reset jumped to the empty boot section. Now
+   `no_bootloader` - high fuse changes 0xD6 -> 0xD7, so **the first flash
+   of this version must include fuses** (`flash.ps1` without
+   `-SkipFuses`).
+9. The heartbeat's "wheel moved while idle" warning no longer fires after
+   a deliberate move (baseline is reset at the end of every move).
+10. **Feed direction fixed (confirmed on real hardware).** The old default
+    fed tape backwards while the loop still settled - so motor AND
+    encoder were both flipped relative to physical "forward". Fixing only
+    the motor polarity would have broken the loop (it'd drive away from
+    every target). `invertMotorA` now flips the motor drive and the
+    AS5600 angle together; default `true` = correct direction on this
+    board (`MOTOR_A_BASE_INVERT` keeps the previously validated
+    motor-vs-encoder relationship). Flipping it at runtime mirrors the
+    angle, so a saved tape zero stops pointing at the same hole.
+11. **Tooth seating always approaches BACKWARDS.** `snapToToothBackward()`
+    moves to the tooth at or behind the current angle, never the one
+    ahead, so seating never pushes extra tape forward. Runs automatically
+    after homing (replacing the old "return to wherever the wheel
+    started" move), and on demand with `SNAP`. Tooth grid is counted from
+    the tape zero hole if set, else from encoder 0.
+12. **Fast feed: hold SW1 >= 700ms** = one full sprocket turn forward
+    (40 teeth, 160mm) for loading tape; short press is still one tooth.
+    Long press chosen over double press so a normal single feed never has
+    to wait to rule out a second press. Also `FASTFEED` debug command.
+    Runs as four 90deg hops - first three pass through at full speed
+    (`moveToAngle(..., passThrough=true)`), only the last decelerates.
+13. **DRV8833 sleeps when idle.** `nSLEEP` goes low 300ms after the last
+    motor drive (time for the end-of-move brake to stop the wheel), and
+    `driveMotorA()`/`driveMotorB()` wake it on demand (2ms). Asleep, the
+    outputs are Hi-Z - motors coast instead of being braked.
+
 Everything else — pin map, protocol, EEPROM layout, calibration,
 addressing, tape-zero/pitch calibration, the DRV8833 channel-swap fix,
 `invertMotorA` (still unverified against that channel swap on real
@@ -84,6 +141,15 @@ specifically addressed above — in particular:
   still lost.
 - `PICK_OFFSET_MM` is still a `0.0` placeholder, not yet measured on
   real hardware.
+- Peel direction (`invertMotorB = false`) not yet confirmed on real
+  hardware - if SW2 winds the cover tape the wrong way, `INVERTB ON`.
+- Peel is not yet coordinated with feeding (FEED doesn't take up cover
+  tape automatically) - tensioning is manual for now.
+- **Button roles (TODO):** final mapping is meant to be SW1 = FEED,
+  SW2 = UNFEED. SW2 is peel-while-held for now as a stopgap. Needs a
+  decision on how peel/tensioning is triggered once SW2 is taken, and how
+  UNFEED interacts with the peel motor and the seat-backwards tooth rule.
+  See the TODO above `peelWhileSw2Held()` in `src/main.cpp`.
 
 See `beta1/project.md`'s own "Open questions" section for the complete,
 up-to-date list and reasoning behind each.
