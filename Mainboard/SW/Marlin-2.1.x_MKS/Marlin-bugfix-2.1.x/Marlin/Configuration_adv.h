@@ -3165,7 +3165,7 @@
   #endif
 
   #if AXIS_IS_TMC_CONFIG(Y)
-    #define Y_CURRENT       900
+    #define Y_CURRENT       950
     //#define Y_CURRENT_HOME  600        // (mA) RMS current for homing. (~67% of run current; series motors)
     #define Y_MICROSTEPS     16
     #define Y_RSENSE          0.11
@@ -3635,7 +3635,7 @@
    * Enable M122 debugging command for TMC stepper drivers.
    * M122 S0/1 will enable continuous reporting.
    */
-  //#define TMC_DEBUG
+  #define TMC_DEBUG
 
   /**
    * You can set your own advanced settings by filling in predefined functions.

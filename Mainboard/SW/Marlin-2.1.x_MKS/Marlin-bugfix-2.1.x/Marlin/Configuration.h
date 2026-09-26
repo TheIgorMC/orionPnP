@@ -37,6 +37,10 @@
  */
 #define CONFIGURATION_H_VERSION 02010300
 
+#define NO_EDGE_STEPPING_WARNING
+#define NO_USER_FEEDBACK_WARNING
+#define NO_AUTO_ASSIGN_WARNING
+
 //===========================================================================
 //============================= Getting Started =============================
 //===========================================================================
@@ -174,6 +178,36 @@
 //#define E5_DRIVER_TYPE A4988
 //#define E6_DRIVER_TYPE A4988
 //#define E7_DRIVER_TYPE A4988
+
+/**
+ * Explicit pin assignment for Y2/I/J, which share the board's E0/E1/E2
+ * driver slots (EXTRUDERS is 0, so those slots are otherwise unused).
+ * Physical wiring: Y2 -> E0, I -> E1, J -> E2.
+ *
+ * Without this, Marlin's auto-assignment (pins_postprocess.h) claims slots
+ * in a fixed X2/Y2/Z2../I/J/K order that does NOT match this wiring: it
+ * would put Y2 on E1, I on E2, and J on the EXP2 header pins (no real
+ * driver there at all without the BTT motor expansion module) -- meaning
+ * G-code sent to one axis silently drives a different physical motor.
+ *
+ * Pin values below are the literal E0, E1, E2 pins from
+ * pins_BTT_SKR_PRO_common.h. Cannot reference the E0_, E1_, E2_ macros
+ * directly here, since the board pins file is not included yet at this point.
+ */
+#define Y2_STEP_PIN       PE14  // = E0_STEP_PIN
+#define Y2_DIR_PIN        PA0   // = E0_DIR_PIN
+#define Y2_ENABLE_PIN     PC3   // = E0_ENABLE_PIN
+#define Y2_SERIAL_TX_PIN  PD4   // = E0_SERIAL_TX_PIN
+
+#define I_STEP_PIN        PD15  // = E1_STEP_PIN
+#define I_DIR_PIN         PE7   // = E1_DIR_PIN
+#define I_ENABLE_PIN      PA3   // = E1_ENABLE_PIN
+#define I_SERIAL_TX_PIN   PD1   // = E1_SERIAL_TX_PIN
+
+#define J_STEP_PIN        PD13  // = E2_STEP_PIN
+#define J_DIR_PIN         PG9   // = E2_DIR_PIN
+#define J_ENABLE_PIN       PF0  // = E2_ENABLE_PIN
+#define J_SERIAL_TX_PIN   PD6   // = E2_SERIAL_TX_PIN
 
 /**
  * Additional Axis Settings
@@ -1335,7 +1369,7 @@
  * Override with M92 (when enabled below)
  *                                      X, Y, Z [, I [, J [, K...]]], E0 [, E1[, E2...]]
  */
-#define DEFAULT_AXIS_STEPS_PER_UNIT   { 100, 100, 160, 8.889, 8.889 }
+#define DEFAULT_AXIS_STEPS_PER_UNIT   { 100, 100, 80, 8.889, 8.889 }
 
 /**
  * Enable support for M92. Disable to save at least ~530 bytes of flash.
@@ -1347,7 +1381,7 @@
  * Override with M203
  *                                      X, Y, Z [, I [, J [, K...]]], E0 [, E1[, E2...]]
  */
-#define DEFAULT_MAX_FEEDRATE          { 510, 510, 20, 1080, 1080 }
+#define DEFAULT_MAX_FEEDRATE          { 510, 510, 80, 1080, 1080 }
 
 //#define LIMITED_MAX_FR_EDITING        // Limit edit via M203 or LCD to DEFAULT_MAX_FEEDRATE * 2
 #if ENABLED(LIMITED_MAX_FR_EDITING)
@@ -1871,8 +1905,8 @@
 
 // Invert the stepper direction. Change (or reverse the motor connector) if an axis goes the wrong way.
 #define INVERT_X_DIR true
-#define INVERT_Y_DIR false
-#define INVERT_Z_DIR false
+#define INVERT_Y_DIR true
+#define INVERT_Z_DIR true
 #define INVERT_I_DIR false
 #define INVERT_J_DIR false
 //#define INVERT_K_DIR false
@@ -2410,7 +2444,7 @@
 #endif
 
 // Homing speeds (linear=mm/min, rotational=°/min)
-#define HOMING_FEEDRATE_MM_M { (10*60), (10*60), (4*60), (30*60), (30*60) }
+#define HOMING_FEEDRATE_MM_M { (10*60), (10*60), (12*60), (30*60), (30*60) }
 
 // Edit homing feedrates with M210 and MarlinUI menu items
 //#define EDITABLE_HOMING_FEEDRATE
