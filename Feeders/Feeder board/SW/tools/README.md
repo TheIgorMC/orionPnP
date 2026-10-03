@@ -1,9 +1,15 @@
 # RS485 command sender
 
-A small PC-side tool for driving the feeder RS485 protocol directly from
-a USB-RS485 adapter, instead of only through the debug port's text
+Small PC-side tools for driving the feeder RS485 protocol directly from a
+USB-RS485 adapter, instead of only through the debug port's text
 commands. See `../PROTOCOL.md` for the frame format and full command
-reference this implements against.
+reference these implement against. Two front ends, same protocol logic
+(`rs485_protocol.py`, shared by both):
+
+- **`rs485_gui.py`** — Tkinter GUI. No separate install beyond pyserial
+  (Tkinter ships with Python). Probably the one to start with.
+- **`rs485_sender.py`** — command-line REPL, same commands as the GUI's
+  "Custom command" panel, handy for scripting or an SSH session.
 
 ## Setup
 
@@ -11,7 +17,27 @@ reference this implements against.
 pip install -r requirements.txt
 ```
 
-## Usage
+## GUI
+
+```
+python rs485_gui.py
+```
+
+Pick a port, Connect, then either use a Quick action button (Scan, Ping,
+Get Status, Stop, Identify, Assign) or build a custom addr/cmd/payload
+frame in the "Custom command" panel and hit Send. Every frame that
+arrives — reply or otherwise — shows up in the log below, decoded where
+the payload shape is known (magnet health, error codes, angle in
+degrees, ...). If the adapter needs the host to drive its direction pin
+manually (some cheap adapters wire DE to RTS instead of auto-detecting
+direction), tick "RTS controls TX (DE)" before connecting.
+
+A typical first session on a bus with one feeder: **Scan** → copy the
+`nonce` from the reply that shows up in the log into the Nonce field,
+pick a new address, **Assign** → **Ping** that address to confirm it
+took → **Get Status** for live telemetry.
+
+## CLI / REPL
 
 ```
 python rs485_sender.py --list              # see available COM ports
@@ -19,8 +45,7 @@ python rs485_sender.py --port COM5         # open an interactive REPL
 ```
 
 If the USB-RS485 adapter needs the host to drive its direction pin
-manually (some cheap adapters wire DE to RTS instead of auto-detecting
-direction), add `--rts-tx`.
+manually, add `--rts-tx` (same situation as the GUI's checkbox above).
 
 Inside the REPL, `help` lists every command. There's a named command for
 each protocol command (`ping`, `scan`, `getstatus`, `setpitch`, `peel`,
