@@ -1175,20 +1175,35 @@ void setRelay(bool engaged) {
 
 // Blocking, called once from setup(). Leaves the relay OFF either way if
 // it returns false (timed out) - never engages on an unstable/unread rail.
+//
+// Holds the internal 1.1V reference for the WHOLE wait, rather than
+// calling readAdcInternalRef() (which switches INTERNAL<->DEFAULT) on
+// every single sample. Toggling the reference mux every 20ms for up to
+// RELAY_READY_TIMEOUT_MS risked adding its own settling noise on top of
+// whatever the rail is actually doing - a healthy rail could still never
+// satisfy RELAY_READY_STABLE_MS if the measurement itself was being
+// perturbed every cycle. Nothing else needs an AVCC-referenced read
+// during this specific wait (IMON isn't touched here), so there's no
+// reason to switch back between samples - only once at the very end.
 bool waitFor5vStableAndEngageRelay() {
+  analogReference(INTERNAL);
+  analogRead(PIN_5V_READY); // discard - reference just changed, needs to settle
+  delay(5);
+
   const unsigned long start = millis();
-  uint16_t lastReading = readAdcInternalRef(PIN_5V_READY);
+  uint16_t lastReading = analogRead(PIN_5V_READY);
   unsigned long stableSinceMs = millis();
 
   while (millis() - start < RELAY_READY_TIMEOUT_MS) {
     delay(20);
-    const uint16_t reading = readAdcInternalRef(PIN_5V_READY);
+    const uint16_t reading = analogRead(PIN_5V_READY);
     if ((uint16_t)abs((int)reading - (int)lastReading) > RELAY_READY_NOISE_BAND) {
       lastReading = reading;
       stableSinceMs = millis(); // moved - restart the stability window
       continue;
     }
     if (millis() - stableSinceMs >= RELAY_READY_STABLE_MS) {
+      analogReference(DEFAULT);
       Serial1.print(F("5V ok (adc="));
       Serial1.print(reading);
       Serial1.println(F("), bus relay ON"));
@@ -1196,6 +1211,7 @@ bool waitFor5vStableAndEngageRelay() {
       return true;
     }
   }
+  analogReference(DEFAULT);
   Serial1.println(F("WARN: 5V not stable, bus relay stays OFF"));
   setRelay(false);
   return false;
