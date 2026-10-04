@@ -106,6 +106,41 @@ itself.
     motor drive (time for the end-of-move brake to stop the wheel), and
     `driveMotorA()`/`driveMotorB()` wake it on demand (2ms). Asleep, the
     outputs are Hi-Z - motors coast instead of being braked.
+14. **Motor soft-start + buttons can't fire from a boot-held state**,
+    both found from the same real-hardware symptom: the 12V eFuse
+    tripping, specifically on motor commands, not at boot.
+    - **No motor command used to ramp duty at all** - `driveMotorA()`/
+      `driveMotorB()` went straight from "stopped" to the target duty in
+      one `analogWrite()`. A motor at a dead stop has no back-EMF yet, so
+      that's close to full voltage across the winding resistance - the
+      locked-rotor/breakaway current regime, briefly well above running
+      current. `VMOT` sits on the 5V rail, so that spike is drawn from
+      the buck's output and reflected back to its 12V input (roughly
+      scaled by the step-down ratio) - exactly what the eFuse's current
+      limit sees. `softStartDuty()` now ramps a target duty up over
+      `MOTOR_SOFTSTART_MS` (100ms) instead of stepping to it, applied in
+      `moveToAngle()` (only when motor A is starting from a genuine
+      standstill - `motorARunning` tracks this so a `fastFeedTurn()`
+      passThrough hop, already spinning, isn't needlessly re-ramped
+      between hops) and unconditionally in `runPeel()`/
+      `peelWhileSw2Held()` (motor B always starts from a dead stop,
+      there's no passThrough equivalent for peel). This tames the
+      transient spike at the start of a move; it doesn't raise an eFuse
+      current limit that's genuinely set below the motor's running
+      current.
+    - **SW1/SW2 were level-checked, not edge-checked** -
+      `if (digitalRead(PIN_SWx) != activeLevel) return;` is satisfied
+      immediately by a button already held down when `loop()` starts, no
+      fresh press needed, and the debounce gate (`lastEdgeMs` starting at
+      0) doesn't stop that either. Holding SW2 through power-up (a
+      natural thing to try on the bench) fired a full-duty
+      `driveMotorB()` within the debounce window of `loop()`'s first
+      pass - stacking the no-soft-start spike above on the point in the
+      board's life it's least settled. `sw1SeenReleased`/
+      `sw2SeenReleased` now gate on having observed the button actually
+      released at least once before any press can register, so a button
+      held from before boot simply never arms until it's let go - no
+      change to normal post-boot press/hold/long-press behavior.
 
 Everything else — pin map, protocol, EEPROM layout, calibration,
 addressing, tape-zero/pitch calibration, the DRV8833 channel-swap fix,

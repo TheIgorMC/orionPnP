@@ -1013,14 +1013,47 @@ void motorsSleepIfIdle() {
 // ---------------------------
 // Motor drive
 // ---------------------------
+// Soft-start: a motor at a dead stop has no back-EMF yet, so a single
+// analogWrite() straight to a real move's target duty is close to
+// slamming full voltage across the winding resistance - the locked-
+// rotor/breakaway current regime, briefly much higher than running
+// current. VMOT sits on the 5V rail, so that spike gets drawn from the
+// buck's output and reflected back to its 12V input (roughly scaled by
+// the step-down ratio) - exactly what an eFuse's current limit sees.
+// Boot alone never produces this (nothing draws a locked-rotor-sized
+// current at power-up); every move/peel start does, in one hard step.
+// softStartDuty() scales a target duty down to a ramp based on how long
+// the current drive attempt has been running, reaching the full target
+// after MOTOR_SOFTSTART_MS instead of in a single step - spreads the
+// same current rise over real time rather than eliminating it (an eFuse
+// current LIMIT that's set below the motor's genuine running current
+// would still trip regardless of ramp shape; this only tames the
+// transient spike at the very start of a move).
+constexpr unsigned long MOTOR_SOFTSTART_MS = 100;
+
+int softStartDuty(int targetDuty, unsigned long sinceStartMs) {
+  if (sinceStartMs >= MOTOR_SOFTSTART_MS) return targetDuty;
+  return (int)((long)targetDuty * (long)sinceStartMs / (long)MOTOR_SOFTSTART_MS);
+}
+
+// Tracks whether motor A is currently being driven, so moveToAngle() can
+// tell a move starting from a dead stop (ramp it) apart from a
+// passThrough hop continuing a fastFeedTurn() sequence the motor's
+// already spinning through (don't re-ramp mid-turn - no locked-rotor
+// condition exists there, and slowing down between hops would just cost
+// speed for no electrical benefit).
+bool motorARunning = false;
+
 void brakeMotorA() {
   digitalWrite(PIN_AIN1, HIGH);
   digitalWrite(PIN_AIN2, HIGH);
+  motorARunning = false;
 }
 
 void driveMotorA(int duty, bool forward) {
   duty = constrain(duty, 0, 255);
   motorsWake();
+  motorARunning = true;
   const bool effectiveForward = (MOTOR_A_BASE_INVERT != invertMotorA) ? !forward : forward;
   if (effectiveForward) {
     analogWrite(PIN_AIN1, duty);
@@ -1354,9 +1387,14 @@ bool buttonPressed(int pin, unsigned long &lastEdgeMs) {
 // ---------------------------
 void runPeel(bool forward, unsigned long ms) {
   ledMoving();
-  driveMotorB(PEEL_DUTY, forward);
   const unsigned long start = millis();
-  while (millis() - start < ms && digitalRead(PIN_nFAULT) != LOW) delay(1);
+  // Peel motor has no closed loop and always starts from a dead stop (no
+  // passThrough-style continuation like motor A) - always ramp, same
+  // reasoning as moveToAngle()'s softStartDuty() use.
+  while (millis() - start < ms && digitalRead(PIN_nFAULT) != LOW) {
+    driveMotorB(softStartDuty(PEEL_DUTY, millis() - start), forward);
+    delay(1);
+  }
   brakeMotorB();
 }
 
@@ -1367,9 +1405,25 @@ void runPeel(bool forward, unsigned long ms) {
 constexpr unsigned long SW1_LONG_PRESS_MS = 700;
 uint8_t fastFeedTurn();
 
+// Buttons are level-checked, not edge-checked, below - "is it down right
+// now" rather than "did it just go down." That's fine for an operator
+// pressing it after boot, but a button already HELD DOWN through power-up
+// (bench instinct: hold it while powering on to see what happens) would
+// otherwise satisfy that level check on loop()'s very first pass, with no
+// fresh press needed at all. For SW2 especially that fires a full-duty
+// driveMotorB() right as the board's least settled after boot - stacking
+// on top of the same no-soft-start current spike the ramp above exists
+// for. sw1SeenReleased/sw2SeenReleased gate on having observed the
+// button in the RELEASED state at least once before any press can ever
+// register - a button held from before boot just never arms until it's
+// actually let go.
+bool sw1SeenReleased = false;
+bool sw2SeenReleased = false;
+
 void handleSw1(unsigned long &lastEdgeMs) {
   const int activeLevel = BUTTONS_ACTIVE_LOW ? LOW : HIGH;
-  if (digitalRead(PIN_SW1) != activeLevel) return;
+  if (digitalRead(PIN_SW1) != activeLevel) { sw1SeenReleased = true; return; }
+  if (!sw1SeenReleased) return; // still held from before boot - ignore until released once
   const unsigned long start = millis();
   if (start - lastEdgeMs < DEBOUNCE_MS) return;
   delay(DEBOUNCE_MS);
@@ -1398,16 +1452,17 @@ void handleSw1(unsigned long &lastEdgeMs) {
 // PEEL_HOLD_MAX_MS), so the operator can tension the tape by feel.
 void peelWhileSw2Held(unsigned long &lastEdgeMs) {
   const int activeLevel = BUTTONS_ACTIVE_LOW ? LOW : HIGH;
-  if (digitalRead(PIN_SW2) != activeLevel) return;
+  if (digitalRead(PIN_SW2) != activeLevel) { sw2SeenReleased = true; return; }
+  if (!sw2SeenReleased) return; // still held from before boot - ignore until released once
   const unsigned long start = millis();
   if (start - lastEdgeMs < DEBOUNCE_MS) return;
   delay(DEBOUNCE_MS);
   if (digitalRead(PIN_SW2) != activeLevel) return; // bounce, not a press
 
   ledMoving();
-  driveMotorB(PEEL_DUTY, true);
   while (digitalRead(PIN_SW2) == activeLevel && digitalRead(PIN_nFAULT) != LOW
          && millis() - start < PEEL_HOLD_MAX_MS) {
+    driveMotorB(softStartDuty(PEEL_DUTY, millis() - start), true);
     delay(1);
   }
   brakeMotorB();
@@ -1492,6 +1547,12 @@ uint8_t moveToAngle(float target, unsigned long timeoutMs, bool passThrough = fa
   unsigned long lastMoveMs = millis();
   unsigned long lastTraceMs = 0;
   float lastAngle = readAngleDeg();
+  // Only ramp if the motor's actually starting from a dead stop here -
+  // a passThrough hop continuing a fastFeedTurn() sequence inherits an
+  // already-spinning motor (motorARunning stays true across hops, since
+  // the passThrough return path below skips brakeMotorA()) and gets the
+  // full target duty immediately, same as before this change.
+  const bool rampFromStandstill = !motorARunning;
 
   ledMoving();
   if (traceMoveEnabled) {
@@ -1514,7 +1575,8 @@ uint8_t moveToAngle(float target, unsigned long timeoutMs, bool passThrough = fa
     const int duty = (fabsf(err) > CREEP_THRESHOLD_DEG)
         ? FAST_DUTY
         : (forward ? minMoveDutyFwd : minMoveDutyRev);
-    driveMotorA(duty, forward);
+    const int appliedDuty = rampFromStandstill ? softStartDuty(duty, millis() - start) : duty;
+    driveMotorA(appliedDuty, forward);
 
     if (fabsf(angleErrorDeg(current, lastAngle)) > STALL_MOVE_THRESHOLD_DEG) {
       lastAngle = current;
