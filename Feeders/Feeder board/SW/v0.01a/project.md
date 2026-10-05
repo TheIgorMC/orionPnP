@@ -186,5 +186,21 @@ specifically addressed above — in particular:
   UNFEED interacts with the peel motor and the seat-backwards tooth rule.
   See the TODO above `peelWhileSw2Held()` in `src/main.cpp`.
 
+- **IMON calibration is a guess, to be developed on.** The only load
+  current available on the bench so far is 28 mA, which reads as raw 128
+  on `PIN_I_MON`. The firmware stores a single (raw, mA) point and
+  assumes a straight line through the origin, so the working calibration
+  is `CALI 28` taken at raw 128, with 0 mA assumed to be raw 0 (also not
+  measured). Nothing between or beyond those two points has been checked.
+  For scale, the factory default is raw 833 = 200 mA (~0.24 mA/count) and
+  the 28 mA point gives ~0.22 mA/count, so they roughly agree, but the
+  TPS26600's near-zero IMON offset and the real full-scale slope are
+  unverified. To develop on: measure at least one more current well above
+  28 mA (ideally near the 200 mA design max) plus a true no-load raw
+  reading; if no-load raw is not ~0, replace the single-point-through-
+  origin model with a two-point (offset + slope) one. 1 count is ~0.22 mA,
+  so the low end is coarse and anything near the eFuse limit is
+  extrapolated.
+
 See `beta1/project.md`'s own "Open questions" section for the complete,
 up-to-date list and reasoning behind each.
