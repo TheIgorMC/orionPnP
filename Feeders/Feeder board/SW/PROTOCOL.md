@@ -93,7 +93,12 @@ see **Error codes** below; otherwise empty).
 | `CMD_STOP` | `0x31` | — | `CMD_ACK` | immediate brake, both motors |
 | `CMD_IDENTIFY` | `0x32` | `[blinkCount]` (0 ⇒ default 3) | `CMD_ACK` (after blinking) | white LED flashes, distinct from the magnet-status green/red |
 | `CMD_GET_SERIAL` | `0x33` | **alpha03+** — — | `CMD_SERIAL_INFO` (`0xA3`): 16 bytes | AT24CS02 factory-programmed 128-bit serial number; `CMD_NACK` if the chip didn't respond |
-| `CMD_PEEL` | `0x34` | **v0.01a+** — `[dir(0=fwd,1=rev), duration×10ms (1–255)]` | `CMD_ACK` (after the run) / `CMD_NACK` | runs the peel motor alone (open loop) to tension the cover tape; stops early on a DRV8833 fault |
+| `CMD_PEEL` | `0x34` | **v0.01a+** — `[dir(0=fwd,1=rev), duration×10ms (1–255)]`; **v0.02+** also `[dir]` alone | `CMD_ACK` (after the run) / `CMD_NACK` | runs the peel motor alone (open loop) to tension the cover tape; stops early on a DRV8833 fault. With `[dir]` alone (v0.02) it runs this feeder's calibrated time, `CMD_NACK [ERR_NOT_READY]` if none is saved |
+| `CMD_SET_PEEL_TIME` | `0x35` | **v0.02+** — `[msHi,msLo]` (10–5000) | `CMD_ACK` (echo) / `CMD_NACK [ERR_BAD_PARAM]` | saves this feeder's peel time in the ATmega's internal EEPROM. Per feeder, independent of the loaded component: survives `CMD_SET_COMPONENT` and `CMD_RESET_CONFIG` |
+| `CMD_GET_PEEL_TIME` | `0x36` | **v0.02+** — — | `CMD_PEEL_TIME_INFO` (`0xA4`): `[msHi,msLo]` | `0xFFFF` = not calibrated |
+| `CMD_JOG` | `0x37` | **v0.02+** — `[hi,lo]` signed, 0.1 mm units (±1600) | `CMD_ACK [angleRawHi,angleRawLo]` / `CMD_NACK [errCode]` | relative move of the sprocket (negative = backwards), same closed-loop move/stall/timeout handling as `CMD_FEED_NEXT`. The ACK carries the new raw angle. Use to seat a hole, then `CMD_ZERO_HERE`. Blocks like a feed |
+| `CMD_I2C_SCAN` | `0x38` | **v0.02+** — — | `CMD_I2C_SCAN_INFO` (`0xA5`): responding 7-bit addresses, up to 16 | diagnoses the AT24: `0x36` AS5600, `0x50`–`0x57` EEPROM, `0x58`–`0x5F` AT24CS02 serial page |
+| `CMD_SET_SERIAL` | `0x39` | **v0.02+** — 16 serial bytes | `CMD_ACK` / `CMD_NACK [ERR_LOCKED \| ERR_I2C]` | programs a serial into the normal EEPROM (offset `0x10`, with CRC) and reads it back. Only for a plain AT24C02; `ERR_LOCKED` if an AT24CS02 factory serial exists |
 
 ## Error codes
 
@@ -111,7 +116,9 @@ e.g. a local button jog). `0x00` is the only success value.
 | `0x03` | `ERR_STALL` | no encoder motion for `STALL_TIMEOUT_MS` |
 | `0x04` | `ERR_TIMEOUT` | move exceeded its timeout without reaching target |
 | `0x05` | `ERR_BAD_PARAM` | malformed/out-of-range command payload |
-| `0x06` | `ERR_NOT_READY` | e.g. `CMD_FEED_NEXT` requested before pitch/zero calibrated |
+| `0x06` | `ERR_NOT_READY` | e.g. `CMD_FEED_NEXT` requested before pitch/zero calibrated; `CMD_PEEL [dir]` with no saved peel time |
+| `0x07` | `ERR_I2C` | **v0.02+** — AT24 EEPROM didn't answer, or a write didn't read back identically (also `CMD_GET_SERIAL` with no serial available) |
+| `0x08` | `ERR_LOCKED` | **v0.02+** — `CMD_SET_SERIAL` refused: an AT24CS02 factory serial exists |
 
 ## Hardware identity vs. per-component config
 
@@ -136,6 +143,18 @@ for the full reasoning:
   moves it onto the AT24CS02's EEPROM** (byte offset `0x00`), so it
   survives even a full chip-erase/reflash of the ATmega, not just a
   component change — see `alpha03/project.md`.
+
+### AT24C02 vs AT24CS02 (v0.02)
+
+The two parts look identical on the bus except for the `-CS` serial page.
+A plain **AT24C02** answers at `0x50` (so tape width reads and writes fine)
+but nothing ever answers at `0x58`, so `CMD_GET_SERIAL` can only fail.
+v0.02 handles both: the factory serial wins if `0x58` answers, otherwise a
+serial programmed with `CMD_SET_SERIAL` is read from EEPROM offset `0x10`
+(16 bytes + a CRC8 byte). `CMD_I2C_SCAN` tells the two apart. EEPROM
+writes are also split on the part's 8-byte page boundaries (a longer write
+wraps within the page and corrupts it), which matters for the 17-byte
+serial block.
 
 ### AT24CS02 (alpha03 only)
 

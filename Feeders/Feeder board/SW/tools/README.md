@@ -46,6 +46,18 @@ Stop motors stay visible above the tabs:
   peel motor, so this host-side sequencing is the only way to pair them
   for now. They can't overlap: the feeder doesn't listen to the bus while
   a motor is running.
+- **Jog & zero** (v0.02 firmware). Buttons jog the sprocket by -4 ... +4 mm
+  (4 mm = one tooth) or a custom distance, each reply shows the new raw
+  angle, then **Set zero here** stores it as the tape zero.
+- **Peel calibration** (Feed & peel tab, v0.02). Find the peel time with
+  the cycle test, **Save time above to feeder** keeps it on that feeder,
+  and "Peel steps use the feeder's saved time" makes the cycle test and
+  CMD_PEEL use it (leave the packet builder's duration blank for the same).
+- **EEPROM / serial** (v0.02). **I2C scan** shows what answers on the
+  feeder's bus. If Get serial NACKs but the scan shows 0x50 and no 0x58,
+  the chip is a plain AT24C02 with no factory serial: **Random** +
+  **Program serial** writes one (read back to verify). Also writes tape
+  width.
 - **Packet builder.** Pick a command and fill in named fields (pitch in
   mm, peel time in ms, dropdowns for direction/motor/on-off). It shows
   what the command does, which reply to expect, gotchas, and a live

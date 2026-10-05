@@ -42,6 +42,11 @@ CMD_NAMES = {
     0x32: "CMD_IDENTIFY",
     0x33: "CMD_GET_SERIAL", 0xA3: "CMD_SERIAL_INFO",
     0x34: "CMD_PEEL",
+    0x35: "CMD_SET_PEEL_TIME",
+    0x36: "CMD_GET_PEEL_TIME", 0xA4: "CMD_PEEL_TIME_INFO",
+    0x37: "CMD_JOG",
+    0x38: "CMD_I2C_SCAN", 0xA5: "CMD_I2C_SCAN_INFO",
+    0x39: "CMD_SET_SERIAL",
     0x82: "CMD_ACK",
     0x83: "CMD_NACK",
 }
@@ -54,6 +59,8 @@ ERROR_CODES = {
     0x04: "ERR_TIMEOUT",
     0x05: "ERR_BAD_PARAM",
     0x06: "ERR_NOT_READY",
+    0x07: "ERR_I2C",
+    0x08: "ERR_LOCKED",
 }
 
 def cmd_name(code):
@@ -131,9 +138,44 @@ def decode_payload(cmd: int, p: bytes) -> str:
             return out
         if cmd == 0xA3 and len(p) >= 1:  # CMD_SERIAL_INFO
             return f"serial={p.hex()}"
+        if cmd == 0xA4 and len(p) >= 2:  # CMD_PEEL_TIME_INFO (v0.02+)
+            ms = (p[0] << 8) | p[1]
+            return "peelTime=UNCALIBRATED" if ms == 0xFFFF else f"peelTime={ms}ms"
+        if cmd == 0xA5:  # CMD_I2C_SCAN_INFO (v0.02+)
+            return describe_i2c_scan(p)
     except Exception as exc:  # malformed/short payload from a flaky link - don't crash the caller
         return f"(decode error: {exc})"
     return ""
+
+
+I2C_KNOWN = {0x36: "AS5600 encoder"}
+
+
+def i2c_label(a: int) -> str:
+    if a in I2C_KNOWN:
+        return I2C_KNOWN[a]
+    if 0x50 <= a <= 0x57:
+        return "AT24 EEPROM"
+    if 0x58 <= a <= 0x5F:
+        return "AT24CS02 serial page"
+    return "unknown"
+
+
+def describe_i2c_scan(p: bytes) -> str:
+    """What answered on the feeder's I2C bus, plus what that implies for the
+    serial number (a plain AT24C02 has no 0x58 serial page)."""
+    if not p:
+        return "no I2C devices answered"
+    out = "i2c: " + ", ".join(f"0x{a:02X} ({i2c_label(a)})" for a in p)
+    have_eeprom = any(0x50 <= a <= 0x57 for a in p)
+    have_serial = any(0x58 <= a <= 0x5F for a in p)
+    if not have_eeprom:
+        out += " -> EEPROM not answering: check wiring/soldering of the AT24"
+    elif not have_serial:
+        out += " -> plain AT24C02 (no factory serial page): use Program serial"
+    else:
+        out += " -> AT24CS02 with factory serial"
+    return out
 
 
 class FrameAssembler:
@@ -297,9 +339,12 @@ class Field:
       u16    - two bytes, big-endian
       ms10   - entered in ms, sent as one byte of ms/10 (CMD_PEEL)
       choice - one byte picked from `choices` [(label, value), ...]
+      mm10   - entered in mm (decimal, signed), sent as signed 16-bit 0.1mm units (CMD_JOG)
+      hex16  - 32 hex digits sent as 16 raw bytes (CMD_SET_SERIAL)
     """
 
-    def __init__(self, name, kind, default, help="", choices=None, lo=0, hi=None):
+    def __init__(self, name, kind, default, help="", choices=None, lo=0, hi=None, optional=False):
+        self.optional = optional  # a blank value is left out of the payload (trailing fields only)
         self.name = name
         self.kind = kind
         self.default = default
@@ -310,6 +355,16 @@ class Field:
 
     def encode(self, text: str) -> bytes:
         text = str(text).strip()
+        if self.kind == "mm10":
+            tenths = round(float(text) * 10)
+            if tenths == 0 or not -self.hi <= tenths <= self.hi:
+                raise ValueError(f"{self.name}: {text}mm out of range (0.1 to {self.hi / 10:g} mm, either sign)")
+            return (tenths & 0xFFFF).to_bytes(2, "big")
+        if self.kind == "hex16":
+            digits = text.replace(" ", "").replace("-", "")
+            if len(digits) != 32:
+                raise ValueError(f"{self.name}: need 32 hex digits, got {len(digits)}")
+            return bytes.fromhex(digits)
         if self.kind == "choice":
             for label, value in self.choices:
                 if text == label:
@@ -333,7 +388,12 @@ class CmdSpec:
         self.broadcast = broadcast  # firmware only honors it when sent to addr 0x00
 
     def encode(self, values) -> bytes:
-        return b"".join(f.encode(v) for f, v in zip(self.fields, values))
+        parts = []
+        for f, v in zip(self.fields, values):
+            if f.optional and not str(v).strip():
+                break
+            parts.append(f.encode(v))
+        return b"".join(parts)
 
 
 _ON_OFF = [("off", 0), ("on", 1)]
@@ -382,8 +442,25 @@ COMMAND_SPECS = {
     0x33: CmdSpec("Read the AT24CS02 factory serial.", "CMD_SERIAL_INFO (16 bytes), or CMD_NACK"),
     0x34: CmdSpec("Run the peel motor alone for a set time.", "CMD_ACK (echo) after the run, or CMD_NACK",
                   [Field("dir", "choice", "fwd", choices=[("fwd", 0), ("rev", 1)]),
-                   Field("duration", "ms10", "300", "ms, 10-2550 (sent as ms/10)", lo=10)],
+                   Field("duration", "ms10", "300", "ms, 10-2550 (sent as ms/10); BLANK = feeder's calibrated time (v0.02+)",
+                         lo=10, optional=True)],
                   notes="Open loop, no encoder. Blocks the feeder for the whole run."),
+    0x35: CmdSpec("Save this feeder's calibrated peel time (stored on the feeder, survives reboots and component changes).",
+                  "CMD_ACK (echo), or CMD_NACK ERR_BAD_PARAM",
+                  [Field("peelMs", "u16", "1570", "ms, 10-5000", lo=10, hi=5000)],
+                  notes="v0.02+. Use it with CMD_PEEL by leaving the duration blank."),
+    0x36: CmdSpec("Read this feeder's calibrated peel time.", "CMD_PEEL_TIME_INFO: peelMs (0xFFFF = uncalibrated)",
+                  notes="v0.02+."),
+    0x37: CmdSpec("Move the sprocket by a distance, relative to where it is (negative = backwards).",
+                  "CMD_ACK [angleRawHi, angleRawLo] = new position, or CMD_NACK [errCode]",
+                  [Field("mm", "mm10", "0.5", "mm, signed, 0.1 resolution, up to 160", hi=1600)],
+                  notes="v0.02+. Use it to seat a sprocket hole, then CMD_ZERO_HERE. Blocks up to 6s."),
+    0x38: CmdSpec("List the I2C addresses that answer (diagnoses the AT24 EEPROM).",
+                  "CMD_I2C_SCAN_INFO: list of addresses", notes="v0.02+."),
+    0x39: CmdSpec("Program a 16-byte serial into a plain AT24C02 (read back and verified).",
+                  "CMD_ACK, or CMD_NACK ERR_LOCKED (factory serial exists) / ERR_I2C (EEPROM problem)",
+                  [Field("serial", "hex16", "", "32 hex digits")],
+                  notes="v0.02+. Not needed on an AT24CS02: its factory serial is read-only and always wins."),
 }
 
 

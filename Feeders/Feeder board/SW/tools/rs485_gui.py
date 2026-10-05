@@ -19,6 +19,7 @@ Usage:
     python rs485_gui.py
 """
 import queue
+import secrets
 import statistics
 import sys
 import threading
@@ -58,12 +59,23 @@ CMD_COMPONENT_INFO = 0xA0
 CMD_SET_PITCH_MM = 0x25
 CMD_FEED_NEXT = 0x26
 CMD_PEEL = 0x34
+CMD_ZERO_HERE = 0x24
+CMD_GET_SERIAL = 0x33
+CMD_SET_HW_INFO = 0x2A
+CMD_GET_HW_INFO = 0x29
+CMD_SET_PEEL_TIME = 0x35
+CMD_GET_PEEL_TIME = 0x36
+CMD_JOG = 0x37
+CMD_I2C_SCAN = 0x38
+CMD_SET_SERIAL = 0x39
 
 # Reply timeouts. FEED_NEXT can legitimately take up to the firmware's
 # MOVE_TIMEOUT_MS (6000) before it NACKs; PEEL replies only after the run.
 DEFAULT_REPLY_TIMEOUT_S = 1.0
 FEED_REPLY_TIMEOUT_S = 7.0
 PEEL_REPLY_MARGIN_S = 1.5
+PEEL_CAL_MAX_S = 5.0  # firmware caps the calibrated peel time at 5000 ms
+JOG_STEPS_MM = [-4, -2, -1, -0.5, -0.2, 0.2, 0.5, 1, 2, 4]
 DISCOVER_WINDOW_S = 0.6  # firmware jitters replies over 0-200ms
 
 CYCLE_ORDERS = ["feed, then peel", "peel, then feed", "feed only", "peel only"]
@@ -249,7 +261,9 @@ class App:
         tabs = ttk.Notebook(self.root)
         tabs.grid(row=2, column=0, sticky="ew", **pad)
         tabs.add(self._build_setup_tab(tabs), text="Address setup")
+        tabs.add(self._build_jog_tab(tabs), text="Jog & zero")
         tabs.add(self._build_feed_tab(tabs), text="Feed & peel test")
+        tabs.add(self._build_eeprom_tab(tabs), text="EEPROM / serial")
         tabs.add(self._build_builder_tab(tabs), text="Packet builder")
 
         # --- Log ---
@@ -299,16 +313,45 @@ class App:
 
         row = ttk.Frame(tab)
         row.grid(row=3, column=0, columnspan=7, sticky="w")
-        ttk.Button(row, text="Get serial", command=lambda: self._quick(0x33)).grid(row=0, column=0, **pad)
-        ttk.Button(row, text="Get HW info", command=lambda: self._quick(0x29)).grid(row=0, column=1, **pad)
-        ttk.Button(row, text="Get component/config", command=lambda: self._quick(CMD_GET_COMPONENT)).grid(row=0, column=2, **pad)
+        ttk.Button(row, text="Get component/config", command=lambda: self._quick(CMD_GET_COMPONENT)).grid(row=0, column=0, **pad)
+        return tab
+
+    def _build_jog_tab(self, parent):
+        pad = {"padx": 4, "pady": 4}
+        tab = ttk.Frame(parent)
+        ttk.Label(tab, foreground="gray25", wraplength=760, justify="left", text=(
+            "Seat the sprocket hole for the reel's first pocket, then Set zero here. Needs v0.02 firmware. "
+            "4 mm = one tooth, 2 mm = half a tooth (the finest feed pitch). Jog moves are relative to where "
+            "the wheel is; each reply shows the new raw angle.")
+        ).grid(row=0, column=0, columnspan=12, sticky="w", **pad)
+
+        for i, mm in enumerate(JOG_STEPS_MM):
+            label = f"{mm:+g} mm"
+            ttk.Button(tab, text=label, width=8, command=lambda m=mm: self._jog(m)).grid(row=1, column=i, **pad)
+
+        ttk.Label(tab, text="Custom (mm):").grid(row=2, column=0, columnspan=2, sticky="e", **pad)
+        self.jog_custom_var = tk.StringVar(value="0.5")
+        ttk.Entry(tab, textvariable=self.jog_custom_var, width=8).grid(row=2, column=2, columnspan=2, sticky="w", **pad)
+        ttk.Button(tab, text="Jog", command=self._do_jog_custom).grid(row=2, column=4, columnspan=2, **pad)
+        ttk.Label(tab, foreground="gray40", text="signed, 0.1 mm resolution, up to 160").grid(
+            row=2, column=6, columnspan=6, sticky="w", **pad)
+
+        ttk.Separator(tab).grid(row=3, column=0, columnspan=12, sticky="ew", pady=6)
+        ttk.Button(tab, text="Set zero here", command=self._do_zero_here).grid(row=4, column=0, columnspan=2, **pad)
+        ttk.Button(tab, text="Get status", command=lambda: self._quick(0x30)).grid(row=4, column=2, columnspan=2, **pad)
+        ttk.Button(tab, text="Feed once", command=lambda: self._start_cycle(1, "feed only")).grid(row=4, column=4, columnspan=2, **pad)
+        ttk.Label(tab, foreground="gray40", wraplength=420, justify="left", text=(
+            "Set zero here stores the current wheel angle as the tape zero (CMD_ZERO_HERE). "
+            "Changing the component id clears it. Flipping the feed direction mirrors the angle, "
+            "so set the direction first.")
+        ).grid(row=4, column=6, columnspan=6, sticky="w", **pad)
         return tab
 
     def _build_feed_tab(self, parent):
         pad = {"padx": 4, "pady": 4}
         tab = ttk.Frame(parent)
         ttk.Label(tab, foreground="#c64600", wraplength=760, justify="left", text=(
-            "v0.01a firmware does not couple feed and peel: CMD_FEED_NEXT only turns the sprocket (motor A). "
+            "The firmware does not couple feed and peel: CMD_FEED_NEXT only turns the sprocket (motor A). "
             "The cycle test below runs them back-to-back from the PC, waiting for each ACK. They can't overlap: "
             "the feeder doesn't listen to the bus while a motor runs.")
         ).grid(row=0, column=0, columnspan=8, sticky="w", **pad)
@@ -326,29 +369,69 @@ class App:
         self.peel_dir_var = tk.StringVar(value="fwd")
         ttk.Combobox(tab, textvariable=self.peel_dir_var, width=6, state="readonly", values=["fwd", "rev"]).grid(row=2, column=1, sticky="w", **pad)
         ttk.Label(tab, text="Peel time (ms):").grid(row=2, column=2, sticky="e", **pad)
-        self.peel_ms_var = tk.StringVar(value="300")
-        ttk.Spinbox(tab, textvariable=self.peel_ms_var, from_=10, to=2550, increment=10, width=7).grid(row=2, column=3, sticky="w", **pad)
+        self.peel_ms_var = tk.StringVar(value="1570")
+        ttk.Spinbox(tab, textvariable=self.peel_ms_var, from_=10, to=5000, increment=10, width=7).grid(row=2, column=3, sticky="w", **pad)
         ttk.Button(tab, text="Peel once", command=lambda: self._start_cycle(1, "peel only")).grid(row=2, column=4, **pad)
-        ttk.Label(tab, foreground="gray40", text="10-2550ms, 10ms steps").grid(row=2, column=5, columnspan=3, sticky="w", **pad)
+        ttk.Label(tab, foreground="gray40", text="10ms steps; one-off runs up to 2550ms, saved time up to 5000ms").grid(
+            row=2, column=5, columnspan=3, sticky="w", **pad)
+
+        # Per-feeder calibration (v0.02)
+        cal = ttk.LabelFrame(tab, text="This feeder's calibrated peel time (v0.02 firmware)")
+        cal.grid(row=3, column=0, columnspan=8, sticky="ew", **pad)
+        ttk.Button(cal, text="Save time above to feeder", command=self._do_save_peel_cal).grid(row=0, column=0, **pad)
+        ttk.Button(cal, text="Read from feeder", command=lambda: self._quick(CMD_GET_PEEL_TIME)).grid(row=0, column=1, **pad)
+        ttk.Button(cal, text="Run calibrated peel (fwd)", command=lambda: self._do_peel_cal_run(0)).grid(row=0, column=2, **pad)
+        ttk.Button(cal, text="(rev)", command=lambda: self._do_peel_cal_run(1)).grid(row=0, column=3, **pad)
+        self.peel_use_cal_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(cal, text="Peel steps below use the feeder's saved time", variable=self.peel_use_cal_var).grid(
+            row=1, column=0, columnspan=4, sticky="w", **pad)
 
         # Cycle test
-        ttk.Separator(tab).grid(row=3, column=0, columnspan=8, sticky="ew", pady=6)
-        ttk.Label(tab, text="Cycle:").grid(row=4, column=0, sticky="e", **pad)
+        ttk.Separator(tab).grid(row=4, column=0, columnspan=8, sticky="ew", pady=6)
+        ttk.Label(tab, text="Cycle:").grid(row=5, column=0, sticky="e", **pad)
         self.order_var = tk.StringVar(value=CYCLE_ORDERS[0])
-        ttk.Combobox(tab, textvariable=self.order_var, width=16, state="readonly", values=CYCLE_ORDERS).grid(row=4, column=1, columnspan=2, sticky="w", **pad)
-        ttk.Label(tab, text="Cycles:").grid(row=4, column=3, sticky="e", **pad)
+        ttk.Combobox(tab, textvariable=self.order_var, width=16, state="readonly", values=CYCLE_ORDERS).grid(row=5, column=1, columnspan=2, sticky="w", **pad)
+        ttk.Label(tab, text="Cycles:").grid(row=5, column=3, sticky="e", **pad)
         self.cycles_var = tk.StringVar(value="5")
-        ttk.Spinbox(tab, textvariable=self.cycles_var, from_=1, to=1000, width=6).grid(row=4, column=4, sticky="w", **pad)
-        ttk.Label(tab, text="Pause between (ms):").grid(row=4, column=5, sticky="e", **pad)
+        ttk.Spinbox(tab, textvariable=self.cycles_var, from_=1, to=1000, width=6).grid(row=5, column=4, sticky="w", **pad)
+        ttk.Label(tab, text="Pause between (ms):").grid(row=5, column=5, sticky="e", **pad)
         self.pause_var = tk.StringVar(value="300")
-        ttk.Spinbox(tab, textvariable=self.pause_var, from_=0, to=10000, increment=100, width=7).grid(row=4, column=6, sticky="w", **pad)
-        ttk.Button(tab, text="Run cycle test", command=lambda: self._start_cycle(None, None)).grid(row=4, column=7, **pad)
+        ttk.Spinbox(tab, textvariable=self.pause_var, from_=0, to=10000, increment=100, width=7).grid(row=5, column=6, sticky="w", **pad)
+        ttk.Button(tab, text="Run cycle test", command=lambda: self._start_cycle(None, None)).grid(row=5, column=7, **pad)
 
         ttk.Label(tab, foreground="gray40", wraplength=760, justify="left", text=(
             "Each step logs its round-trip time. FEED time is the real sprocket move; PEEL time is the duration "
             "you asked for. Tune the peel time until the cover tape stays taut over several cycles without "
-            "lifting the next pocket.")
-        ).grid(row=5, column=0, columnspan=8, sticky="w", **pad)
+            "lifting the next pocket, then save it to the feeder.")
+        ).grid(row=6, column=0, columnspan=8, sticky="w", **pad)
+        return tab
+
+    def _build_eeprom_tab(self, parent):
+        pad = {"padx": 4, "pady": 4}
+        tab = ttk.Frame(parent)
+        ttk.Label(tab, foreground="gray25", wraplength=760, justify="left", text=(
+            "If Get serial answers NACK ERR_I2C but everything else works, the EEPROM is probably a plain AT24C02: "
+            "it has no factory serial page, so there is nothing to read. I2C scan tells you which it is. On a plain "
+            "AT24C02 you can program your own serial (v0.02 firmware). An AT24CS02's factory serial is read-only.")
+        ).grid(row=0, column=0, columnspan=6, sticky="w", **pad)
+
+        ttk.Button(tab, text="I2C scan", command=lambda: self._quick(CMD_I2C_SCAN)).grid(row=1, column=0, **pad)
+        ttk.Button(tab, text="Get serial", command=lambda: self._quick(CMD_GET_SERIAL)).grid(row=1, column=1, **pad)
+        ttk.Button(tab, text="Get HW info", command=lambda: self._quick(CMD_GET_HW_INFO)).grid(row=1, column=2, **pad)
+
+        ttk.Label(tab, text="Serial (32 hex):").grid(row=2, column=0, sticky="e", **pad)
+        self.serial_var = tk.StringVar()
+        ttk.Entry(tab, textvariable=self.serial_var, width=40, font=("Consolas", 10)).grid(row=2, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Button(tab, text="Random", command=lambda: self.serial_var.set(secrets.token_hex(16).upper())).grid(row=2, column=4, **pad)
+        ttk.Button(tab, text="Program serial", command=self._do_program_serial).grid(row=2, column=5, **pad)
+        ttk.Label(tab, foreground="gray40", text="Write it down or keep the log: it is the feeder's identity.").grid(
+            row=3, column=1, columnspan=5, sticky="w", **pad)
+
+        ttk.Label(tab, text="Tape width (mm):").grid(row=4, column=0, sticky="e", **pad)
+        self.width_var = tk.StringVar(value="8")
+        ttk.Combobox(tab, textvariable=self.width_var, width=6, state="readonly",
+                     values=["8", "12", "16", "24", "32", "44", "56"]).grid(row=4, column=1, sticky="w", **pad)
+        ttk.Button(tab, text="Write tape width", command=self._do_write_width).grid(row=4, column=2, columnspan=2, sticky="w", **pad)
         return tab
 
     def _build_builder_tab(self, parent):
@@ -542,6 +625,9 @@ class App:
         elif frame.cmd == CMD_NACK:
             err = ERROR_CODES.get(frame.payload[0], f"0x{frame.payload[0]:02X}") if frame.payload else "(no code)"
             self._log(f"   {cmd_name(cmd)} NACK {err} after {ms:.0f} ms", "err")
+        elif cmd == CMD_JOG and len(frame.payload) >= 2:
+            raw = (frame.payload[0] << 8) | frame.payload[1]
+            self._log(f"   jog done in {ms:.0f} ms: angle raw={raw} ({raw * 360.0 / 4096.0:.1f} deg)", "result")
         else:
             self._log(f"   {cmd_name(cmd)} -> {cmd_name(frame.cmd)} in {ms:.0f} ms", "result")
         return frame, ms
@@ -620,24 +706,29 @@ class App:
         if addr is None:
             return
         order = order or self.order_var.get()
+        use_cal = self.peel_use_cal_var.get()
         try:
             n = cycles or int(self.cycles_var.get())
             pause_s = int(self.pause_var.get()) / 1000.0
-            peel_ms = int(self.peel_ms_var.get())
-            peel_payload = COMMAND_SPECS[CMD_PEEL].encode([self.peel_dir_var.get(), peel_ms])
+            if use_cal:
+                peel_payload = COMMAND_SPECS[CMD_PEEL].encode([self.peel_dir_var.get(), ""])
+                peel_timeout = PEEL_CAL_MAX_S + PEEL_REPLY_MARGIN_S
+            else:
+                peel_ms = int(self.peel_ms_var.get())
+                peel_payload = COMMAND_SPECS[CMD_PEEL].encode([self.peel_dir_var.get(), peel_ms])
+                peel_timeout = peel_payload[1] / 100.0 + PEEL_REPLY_MARGIN_S
+                if peel_payload[1] * 10 != peel_ms and "peel" in order:
+                    self._log(f"Peel time rounded to {peel_payload[1] * 10} ms (10ms steps).", "info")
         except ValueError as exc:
             self._log(f"Bad cycle settings: {exc}", "err")
             return
-        if peel_payload[1] * 10 != peel_ms and "peel" in order:
-            self._log(f"Peel time rounded to {peel_payload[1] * 10} ms (10ms steps).", "info")
         steps = {"feed, then peel": ["feed", "peel"], "peel, then feed": ["peel", "feed"],
                  "feed only": ["feed"], "peel only": ["peel"]}[order]
         self._start_worker(order if n == 1 else f"{n}x {order}",
-                           lambda: self._cycle(addr, n, steps, peel_payload, pause_s))
+                           lambda: self._cycle(addr, n, steps, peel_payload, pause_s, peel_timeout))
 
-    def _cycle(self, addr, n, steps, peel_payload, pause_s):
+    def _cycle(self, addr, n, steps, peel_payload, pause_s, peel_timeout):
         times = {"feed": [], "peel": []}
-        peel_timeout = peel_payload[1] / 100.0 + PEEL_REPLY_MARGIN_S
         try:
             for i in range(n):
                 if n > 1:
@@ -648,8 +739,11 @@ class App:
                     else:
                         frame, ms = self._req(addr, CMD_PEEL, peel_payload, timeout_s=peel_timeout)
                     if frame is None or frame.cmd != CMD_ACK:
-                        if frame is not None and step == "feed" and frame.payload[:1] == b"\x06":
+                        code = frame.payload[:1] if frame is not None else b""
+                        if code == b"\x06" and step == "feed":
                             self._log("   ERR_NOT_READY: no pitch set - use Set pitch first.", "err")
+                        elif code == b"\x06" and step == "peel":
+                            self._log("   ERR_NOT_READY: no saved peel time - use Save time above to feeder first.", "err")
                         self._log("Stopping the test at the first failure.", "err")
                         return
                     times[step].append(ms)
@@ -660,7 +754,85 @@ class App:
                 for step, t in times.items():
                     if t:
                         self._log(f"{step.upper()}: {len(t)} ok, avg {statistics.mean(t):.0f} ms, "
-                                   f"min {min(t):.0f}, max {max(t):.0f}", "result")
+                                  f"min {min(t):.0f}, max {max(t):.0f}", "result")
+
+    # --- Peel calibration ---
+    def _do_save_peel_cal(self):
+        addr = self._parse_addr(self.addr_var, "target address")
+        if addr is None:
+            return
+        try:
+            payload = COMMAND_SPECS[CMD_SET_PEEL_TIME].encode([self.peel_ms_var.get()])
+        except ValueError as exc:
+            self._log(f"Bad peel time: {exc}", "err")
+            return
+
+        def run():
+            frame, _ = self._req(addr, CMD_SET_PEEL_TIME, payload)
+            if frame is not None and frame.cmd == CMD_ACK:
+                self._req(addr, CMD_GET_PEEL_TIME, expect=(0xA4,))  # read it back
+        self._start_worker("save peel time", run)
+
+    def _do_peel_cal_run(self, direction):
+        addr = self._parse_addr(self.addr_var, "target address")
+        if addr is not None:
+            self._start_worker("calibrated peel", lambda: self._req(
+                addr, CMD_PEEL, bytes([direction]), timeout_s=PEEL_CAL_MAX_S + PEEL_REPLY_MARGIN_S))
+
+    # --- Jog / zero ---
+    def _jog(self, mm):
+        addr = self._parse_addr(self.addr_var, "target address")
+        if addr is None:
+            return
+        try:
+            payload = COMMAND_SPECS[CMD_JOG].encode([str(mm)])
+        except ValueError as exc:
+            self._log(f"Bad jog: {exc}", "err")
+            return
+        self._start_worker(f"jog {mm:+g} mm", lambda: self._req(
+            addr, CMD_JOG, payload, timeout_s=FEED_REPLY_TIMEOUT_S))
+
+    def _do_jog_custom(self):
+        try:
+            mm = float(self.jog_custom_var.get())
+        except ValueError:
+            self._log(f"Bad jog distance: '{self.jog_custom_var.get()}'", "err")
+            return
+        self._jog(mm)
+
+    def _do_zero_here(self):
+        addr = self._parse_addr(self.addr_var, "target address")
+        if addr is not None:
+            self._start_worker("set zero", lambda: self._req(addr, CMD_ZERO_HERE))
+
+    # --- EEPROM ---
+    def _do_program_serial(self):
+        addr = self._parse_addr(self.addr_var, "target address")
+        if addr is None:
+            return
+        try:
+            payload = COMMAND_SPECS[CMD_SET_SERIAL].encode([self.serial_var.get()])
+        except ValueError as exc:
+            self._log(f"Bad serial: {exc}", "err")
+            return
+
+        def run():
+            frame, _ = self._req(addr, CMD_SET_SERIAL, payload, timeout_s=2.0)
+            if frame is None or frame.cmd != CMD_ACK:
+                if frame is not None and frame.payload[:1] == b"\x08":
+                    self._log("   This feeder has a factory serial (AT24CS02); it can't be overridden.", "err")
+                elif frame is not None and frame.payload[:1] == b"\x07":
+                    self._log("   EEPROM write/verify failed - run I2C scan to see what answers.", "err")
+                return
+            self._req(addr, CMD_GET_SERIAL, timeout_s=1.0, expect=(0xA3,))  # read it back
+        self._start_worker("program serial", run)
+
+    def _do_write_width(self):
+        addr = self._parse_addr(self.addr_var, "target address")
+        if addr is None:
+            return
+        payload = COMMAND_SPECS[CMD_SET_HW_INFO].encode([self.width_var.get()])
+        self._start_worker("write tape width", lambda: self._req(addr, CMD_SET_HW_INFO, payload, timeout_s=2.0))
 
     # ---------------------------
     # Packet builder
