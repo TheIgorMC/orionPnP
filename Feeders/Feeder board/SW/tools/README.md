@@ -23,19 +23,36 @@ pip install -r requirements.txt
 python rs485_gui.py
 ```
 
-Pick a port, Connect, then either use a Quick action button (Scan, Ping,
-Get Status, Stop, Identify, Assign) or build a custom addr/cmd/payload
-frame in the "Custom command" panel and hit Send. Every frame that
-arrives — reply or otherwise — shows up in the log below, decoded where
-the payload shape is known (magnet health, error codes, angle in
-degrees, ...). If the adapter needs the host to drive its direction pin
-manually (some cheap adapters wire DE to RTS instead of auto-detecting
-direction), tick "RTS controls TX (DE)" before connecting.
+Pick a port and Connect. The baud is pre-filled from the newest firmware
+folder's `RS485_BAUD` (read from `../<firmware>/src/main.cpp`); pick a
+different firmware in the dropdown if the board runs an older build.
+If the adapter needs the host to drive its direction pin manually (some
+cheap adapters wire DE to RTS instead of auto-detecting direction), tick
+"RTS controls TX (DE)" before connecting.
 
-A typical first session on a bus with one feeder: **Scan** → copy the
-`nonce` from the reply that shows up in the log into the Nonce field,
-pick a new address, **Assign** → **Ping** that address to confirm it
-took → **Get Status** for live telemetry.
+Every frame that arrives shows up in the log, decoded where the payload
+shape is known. The **Target addr** box plus Ping / Get Status / Identify /
+Stop motors stay visible above the tabs:
+
+- **Address setup.** Feeders boot unassigned every power-up. **Scan +
+  assign** does discovery and assignment in one click when exactly one
+  unassigned feeder answers, then sets Target addr. Plain **Scan**
+  auto-fills the Nonce box for a manual **Assign**.
+- **Feed & peel test.** Set the pitch (Set pitch reads it back), then
+  Feed once / Peel once, or **Run cycle test**: N cycles of feed-then-peel
+  (or peel-then-feed, or just one of them), waiting for each ACK and
+  logging how long each step took, with min/avg/max at the end. In
+  v0.01a, `CMD_FEED_NEXT` only turns the sprocket and never runs the
+  peel motor, so this host-side sequencing is the only way to pair them
+  for now. They can't overlap: the feeder doesn't listen to the bus while
+  a motor is running.
+- **Packet builder.** Pick a command and fill in named fields (pitch in
+  mm, peel time in ms, dropdowns for direction/motor/on-off). It shows
+  what the command does, which reply to expect, gotchas, and a live
+  byte-by-byte preview of the exact frame including the CRC. **Copy hex**
+  puts the frame on the clipboard for use in another serial terminal. The
+  payload hex box can be edited by hand to send something malformed.
+  Broadcast-only commands (Discover/Assign) always go to addr 0x00.
 
 ## CLI / REPL
 
@@ -44,6 +61,7 @@ python rs485_sender.py --list              # see available COM ports
 python rs485_sender.py --port COM5         # open an interactive REPL
 ```
 
+`--baud` defaults to the newest firmware's `RS485_BAUD`, same as the GUI.
 If the USB-RS485 adapter needs the host to drive its direction pin
 manually, add `--rts-tx` (same situation as the GUI's checkbox above).
 

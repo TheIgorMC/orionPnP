@@ -14,10 +14,12 @@ CRC8: poly 0x07, computed over ADDR..PAYLOAD - matches the firmware's
 crc8() in src/main.cpp exactly (bit-by-bit MSB-first, no table, no
 init/final XOR).
 """
+import os
+import re
 import time
 
 FRAME_START = 0xAA
-DEFAULT_BAUD = 9600  # both feeder UARTs run off the 8MHz internal RC osc - see PROTOCOL.md
+DEFAULT_BAUD = 9600  # fallback only - firmware_bauds() reads the real value out of each firmware's source
 MAX_PAYLOAD = 16
 
 CMD_NAMES = {
@@ -53,33 +55,6 @@ ERROR_CODES = {
     0x05: "ERR_BAD_PARAM",
     0x06: "ERR_NOT_READY",
 }
-
-# Payload shape for each *request* command - for the GUI's hint label and
-# anyone reading this as a quick reference. Reply payload shapes are
-# decoded in decode_payload() below instead, since those matter more at
-# runtime than as a typing hint.
-PAYLOAD_HINTS = {
-    0x01: "(no payload)",
-    0x10: "(no payload, broadcast)",
-    0x11: "nonceHi nonceLo newAddr  (broadcast)",
-    0x20: "(no payload)",
-    0x21: "idHi idLo",
-    0x22: "zeroHi zeroLo feedHalfTeeth",
-    0x23: "(no payload)",
-    0x24: "(no payload)",
-    0x25: "mm  (1 byte, whole mm)",
-    0x26: "(no payload)",
-    0x27: "state  (0=off, nonzero=on)",
-    0x28: "motor(0=A,1=B) state(0/1)",
-    0x29: "(no payload)",
-    0x2A: "tapeWidthMm",
-    0x30: "(no payload)",
-    0x31: "(no payload)",
-    0x32: "blinkCount  (0 = default 3)",
-    0x33: "(no payload)",
-    0x34: "dir(0=fwd,1=rev) duration_x10ms(1-255)",
-}
-
 
 def cmd_name(code):
     return CMD_NAMES.get(code, f"0x{code:02X}")
@@ -132,7 +107,8 @@ def decode_payload(cmd: int, p: bytes) -> str:
             zero = (p[2] << 8) | p[3]
             comp_s = "UNSET" if comp == 0xFFFF else str(comp)
             zero_s = "UNSET" if zero == 0xFFFF else str(zero)
-            return f"componentId={comp_s} tapeZeroRaw={zero_s} feedHalfTeeth={p[4]}"
+            pitch_s = "UNSET" if p[4] == 0xFF else f"{p[4]} ({p[4] * 2}mm pitch)"
+            return f"componentId={comp_s} tapeZeroRaw={zero_s} feedHalfTeeth={pitch_s}"
         if cmd == 0xA1 and len(p) >= 1:  # CMD_HW_INFO
             width = "UNSET" if p[0] == 0xFF else f"{p[0]}mm"
             return f"tapeWidth={width}"
@@ -257,3 +233,166 @@ def parse_hex_bytes(tokens):
     for t in tokens:
         out.append(int(t, 0) & 0xFF)
     return bytes(out)
+
+
+# ---------------------------
+# Firmware baud lookup
+# ---------------------------
+# The bus baud isn't a protocol constant - it's whatever RS485_BAUD the
+# flashed firmware was built with. Read it straight out of each firmware
+# folder's src/main.cpp (siblings of this tools/ folder) instead of
+# hardcoding a copy here that can silently drift.
+SW_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+_RS485_BAUD_RE = re.compile(r"^\s*const\s+unsigned\s+long\s+RS485_BAUD\s*=\s*(\d+)", re.MULTILINE)
+
+
+def _firmware_sort_key(name: str):
+    n = name.lower()
+    if re.match(r"v\d", n):
+        rank = 3  # release line (v0.01a, ...)
+    elif n.startswith("beta"):
+        rank = 2
+    elif n.startswith("alpha"):
+        rank = 1
+    else:
+        rank = 0  # test benches etc.
+    return (rank, n)
+
+
+def firmware_bauds(sw_root: str = SW_ROOT):
+    """[(folder name, RS485_BAUD)] for every firmware folder under sw_root
+    whose src/main.cpp defines RS485_BAUD, newest release line first."""
+    found = []
+    try:
+        entries = os.listdir(sw_root)
+    except OSError:
+        return found
+    for name in entries:
+        main_cpp = os.path.join(sw_root, name, "src", "main.cpp")
+        if not os.path.isfile(main_cpp):
+            continue
+        try:
+            with open(main_cpp, encoding="utf-8", errors="replace") as f:
+                m = _RS485_BAUD_RE.search(f.read())
+        except OSError:
+            continue
+        if m:
+            found.append((name, int(m.group(1))))
+    found.sort(key=lambda item: _firmware_sort_key(item[0]), reverse=True)
+    return found
+
+
+def latest_firmware_baud(sw_root: str = SW_ROOT):
+    """(folder name, baud) of the newest firmware found, or (None, DEFAULT_BAUD)."""
+    found = firmware_bauds(sw_root)
+    return found[0] if found else (None, DEFAULT_BAUD)
+
+
+# ---------------------------
+# Per-command spec - drives the GUI's packet builder
+# ---------------------------
+class Field:
+    """One payload field. `kind`:
+      u8     - one byte, plain integer
+      u16    - two bytes, big-endian
+      ms10   - entered in ms, sent as one byte of ms/10 (CMD_PEEL)
+      choice - one byte picked from `choices` [(label, value), ...]
+    """
+
+    def __init__(self, name, kind, default, help="", choices=None, lo=0, hi=None):
+        self.name = name
+        self.kind = kind
+        self.default = default
+        self.help = help
+        self.choices = choices or []
+        self.lo = lo
+        self.hi = hi if hi is not None else {"u16": 0xFFFF, "ms10": 2550}.get(kind, 255)
+
+    def encode(self, text: str) -> bytes:
+        text = str(text).strip()
+        if self.kind == "choice":
+            for label, value in self.choices:
+                if text == label:
+                    return bytes([value])
+        v = int(text, 0)  # a choice field also takes a raw number
+        if not self.lo <= v <= self.hi:
+            raise ValueError(f"{self.name}: {v} out of range {self.lo}-{self.hi}")
+        if self.kind == "ms10":
+            return bytes([max(1, min(255, round(v / 10)))])
+        if self.kind == "u16":
+            return bytes([(v >> 8) & 0xFF, v & 0xFF])
+        return bytes([v & 0xFF])
+
+
+class CmdSpec:
+    def __init__(self, summary, reply, fields=(), notes="", broadcast=False):
+        self.summary = summary
+        self.reply = reply
+        self.fields = list(fields)
+        self.notes = notes
+        self.broadcast = broadcast  # firmware only honors it when sent to addr 0x00
+
+    def encode(self, values) -> bytes:
+        return b"".join(f.encode(v) for f, v in zip(self.fields, values))
+
+
+_ON_OFF = [("off", 0), ("on", 1)]
+
+COMMAND_SPECS = {
+    0x01: CmdSpec("Is this address alive?", "CMD_PONG"),
+    0x10: CmdSpec("Ask every UNASSIGNED feeder to announce itself. Each replies after a random 0-200ms delay.",
+                  "CMD_DISCOVER_HERE from addr 0x00: nonce, componentId, tapeWidth",
+                  broadcast=True,
+                  notes="Feeders forget their address on every power-up, so Scan + Assign after each reboot."),
+    0x11: CmdSpec("Give the feeder with this session nonce a bus address.",
+                  "CMD_ACK [newAddr], sent from the new address",
+                  [Field("nonce", "u16", "0x0000", "from the CMD_DISCOVER_HERE reply"),
+                   Field("newAddr", "u8", "1", "1-247", lo=1, hi=247)],
+                  broadcast=True),
+    0x20: CmdSpec("Read component id + feed config.", "CMD_COMPONENT_INFO: componentId, tapeZeroRaw, feedHalfTeeth"),
+    0x21: CmdSpec("Set the loaded component id.", "CMD_ACK (echo)",
+                  [Field("componentId", "u16", "1", "0-65534", hi=65534)],
+                  notes="A DIFFERENT id clears tape zero and pitch - set the pitch again afterwards."),
+    0x22: CmdSpec("Set tape zero and pitch in one go.", "CMD_ACK (echo)",
+                  [Field("tapeZeroRaw", "u16", "0", "AS5600 count 0-4095", hi=4095),
+                   Field("feedHalfTeeth", "u8", "2", "pitch / 2mm (2 = 4mm)", lo=1)]),
+    0x23: CmdSpec("Clear tape zero and pitch.", "CMD_ACK"),
+    0x24: CmdSpec("Save the current wheel angle as tape zero.", "CMD_ACK"),
+    0x25: CmdSpec("Set feed pitch. Rounded to the nearest 2mm.", "CMD_ACK (echo)",
+                  [Field("mm", "u8", "4", "whole mm: 2, 4, 8, 12...", lo=1)],
+                  notes="CMD_FEED_NEXT returns NACK ERR_NOT_READY until a pitch is set."),
+    0x26: CmdSpec("Advance the sprocket by one pitch. Motor A only: the peel motor does NOT run.",
+                  "CMD_ACK when done, or CMD_NACK [errCode]",
+                  notes="Blocks up to 6s. The feeder can't hear the bus while moving, so wait for the reply."),
+    0x27: CmdSpec("External LED on/off.", "CMD_ACK (echo)",
+                  [Field("state", "choice", "on", choices=_ON_OFF)]),
+    0x28: CmdSpec("Flip a motor's direction (RAM only, lost on reboot).", "CMD_ACK (echo)",
+                  [Field("motor", "choice", "B (peel)", choices=[("A (feed)", 0), ("B (peel)", 1)]),
+                   Field("state", "choice", "on", choices=_ON_OFF)],
+                  notes="Flipping motor A mirrors the angle, so a saved tape zero no longer lines up."),
+    0x29: CmdSpec("Read tape width.", "CMD_HW_INFO: tapeWidthMm"),
+    0x2A: CmdSpec("Write tape width to the AT24CS02 (assembly time).", "CMD_ACK (echo), or CMD_NACK if invalid",
+                  [Field("tapeWidthMm", "choice", "8",
+                         choices=[(str(w), w) for w in (8, 12, 16, 24, 32, 44, 56)])]),
+    0x30: CmdSpec("Live telemetry.", "CMD_STATUS_INFO: angle, magnet, fault, lastMoveErr, iMonRaw, relay"),
+    0x31: CmdSpec("Brake both motors.", "CMD_ACK",
+                  notes="Not heard during FEED_NEXT/PEEL: those block the feeder until finished."),
+    0x32: CmdSpec("Blink the status LED white.", "CMD_ACK after blinking",
+                  [Field("blinkCount", "u8", "3", "0 = default 3")]),
+    0x33: CmdSpec("Read the AT24CS02 factory serial.", "CMD_SERIAL_INFO (16 bytes), or CMD_NACK"),
+    0x34: CmdSpec("Run the peel motor alone for a set time.", "CMD_ACK (echo) after the run, or CMD_NACK",
+                  [Field("dir", "choice", "fwd", choices=[("fwd", 0), ("rev", 1)]),
+                   Field("duration", "ms10", "300", "ms, 10-2550 (sent as ms/10)", lo=10)],
+                  notes="Open loop, no encoder. Blocks the feeder for the whole run."),
+}
+
+
+def describe_frame(frame: bytes) -> str:
+    """Annotated byte breakdown of a frame built by build_frame()."""
+    if len(frame) < 5:
+        return frame.hex(" ").upper()
+    parts = [f"{frame[0]:02X} start", f"{frame[1]:02X} addr", f"{frame[2]:02X} cmd", f"{frame[3]:02X} len"]
+    if len(frame) > 5:
+        parts.append(f"{frame[4:-1].hex(' ').upper()} payload")
+    parts.append(f"{frame[-1]:02X} crc")
+    return " | ".join(parts)

@@ -41,7 +41,7 @@ except ImportError:
     sys.exit(1)
 
 from rs485_protocol import (
-    DEFAULT_BAUD,
+    latest_firmware_baud,
     cmd_name,
     build_frame,
     FrameReader,
@@ -289,7 +289,9 @@ def repl(bus):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", help="serial port, e.g. COM5")
-    ap.add_argument("--baud", type=int, default=DEFAULT_BAUD, help=f"default {DEFAULT_BAUD} (matches the firmware)")
+    fw_name, fw_baud = latest_firmware_baud()
+    ap.add_argument("--baud", type=int, default=fw_baud,
+                    help=f"default {fw_baud} (RS485_BAUD from {fw_name or 'built-in fallback'})")
     ap.add_argument("--list", action="store_true", help="list available serial ports and exit")
     ap.add_argument("--rts-tx", action="store_true", dest="rts_tx",
                      help="drive RTS high while transmitting, for adapters that use it as DE control")
