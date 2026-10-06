@@ -112,13 +112,18 @@ measured). **Not yet run on a real board.**
    of it and ignores those opcodes (the jig's final stage relies on that).
    Both builds were only compile-checked. See `../tools/TAPJIG.md`.
 
-7. **Tape width kept in the ATmega EEPROM too.** It used to live only on the
-   AT24; if that chip refused writes or did not answer, the width was lost.
-   Now `SETWIDTH`/`CMD_SET_HW_INFO` always writes an internal copy (EEPROM 64)
-   plus a best-effort AT24 copy, and at boot the AT24 copy wins when valid,
-   else the internal one is used and the AT24 is rewritten from it. The
-   internal EEPROM survives reflashing only with the `EESAVE` fuse (set by
-   this project's fuses) and is lost on a chip erase without it.
+7. **The AT24 is written only by the test firmware.** The AT24 is write
+   protected (WP) in the field and holds factory data (tape width, and a
+   serial on a plain AT24C02), written once in production by the TAP-Jig's
+   `TAPJIG_TEST` build (`AT24_WRITES`) and only read afterwards. The
+   production firmware never writes it: `at24csWriteBytes()` refuses without
+   touching the bus, there is no boot-time "initialise a blank chip" write
+   any more, and `SETWIDTH`/`CMD_SET_HW_INFO`/`CMD_SET_SERIAL` answer
+   `ERR_LOCKED` (to set a width on the bench, flash the test build). The tape
+   width is also mirrored in the ATmega EEPROM (location 64) by the test
+   build, used only if the AT24 is absent or blank; when the AT24 is valid it
+   wins and refreshes the mirror. The jig must release WP while the test
+   firmware writes (see `../tools/TAPJIG.md`).
 
 8. **Slot identity: last address + position X.** The address is still
    disposable (unassigned at every boot). Two things are now remembered

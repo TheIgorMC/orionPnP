@@ -167,6 +167,12 @@ no_serial|no_fiber|stuck_sw1` makes one thing wrong.
 
 ## Open items (need a decision or a measurement)
 
+- **AT24 write protect**: the DUT's AT24 is write protected; stage 14 (test
+  firmware) needs the jig to release WP for the write and restore it
+  afterwards. Not yet a jig command or a routine step; add `WP` control to the
+  jig protocol and wrap stage 14 with it. Production firmware never writes the
+  AT24, so after stage 15 nothing can change those values.
+
 - **Jig firmware**: the 32u4 side of the protocol above is unwritten.
 - **Limits**: every number in the routine is a nominal-value guess. Calibrate on
   a known-good unit, in particular LDR deltas (stages 6, 7), encoder revolution

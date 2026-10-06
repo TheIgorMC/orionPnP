@@ -91,7 +91,7 @@ see **Error codes** below; otherwise empty).
 | `CMD_SET_EXT_LED` | `0x27` | `[state]` (0/nonzero) | `CMD_ACK`/`CMD_NACK` | standard LED, plain on/off. alpha01/02: D13/PB5 (shares the ISP header's SCK line). alpha03: A3/PC3 (own pin, no ISP conflict) |
 | `CMD_SET_INVERT_DIR` | `0x28` | `[motor(0=A,1=B), state(0/1)]` | `CMD_ACK`/`CMD_NACK` | RAM-only, resets on reboot |
 | `CMD_GET_HW_INFO` | `0x29` | — | `CMD_HW_INFO` (`0xA1`): `[tapeWidthMm]` | `0xFF` = unset |
-| `CMD_SET_HW_INFO` | `0x2A` | `[tapeWidthMm]` | `CMD_ACK`/`CMD_NACK` | assembly/bench-time only, validated against EIA-481 widths, no reset command |
+| `CMD_SET_HW_INFO` | `0x2A` | `[tapeWidthMm]` | `CMD_ACK`/`CMD_NACK` | assembly/bench-time only, validated against EIA-481 widths, no reset command | **v0.02b**: production firmware answers `CMD_NACK [ERR_LOCKED]`; only the `TAPJIG_TEST` build writes (the AT24 is write protected).
 | `CMD_GET_STATUS` | `0x30` | — | `CMD_STATUS_INFO` (`0xA2`): `[angleRawHi,angleRawLo,as5600Status,faultActive,lastMoveErr,iMonRawHi,iMonRawLo,relayEngaged]` | live telemetry; last 3 bytes **beta1 only** (alpha02/03 send the first 5) |
 | `CMD_STOP` | `0x31` | — | `CMD_ACK` | immediate brake, both motors |
 | `CMD_IDENTIFY` | `0x32` | `[blinkCount]` (0 ⇒ default 3) | `CMD_ACK` (after blinking) | white LED flashes, distinct from the magnet-status green/red |

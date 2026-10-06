@@ -585,7 +585,21 @@ bool at24csReadBytes(uint8_t i2cAddr, uint8_t memAddr, uint8_t *buf, uint8_t len
 // page instead of continuing. Split every write on page boundaries.
 constexpr uint8_t AT24_PAGE_SIZE = 8;
 
+// The AT24 is write protected (WP pin) in the field: it is written ONCE, in
+// production, by the TAP-Jig's TEST build, and only read afterwards. So the
+// production firmware never writes it - at24csWriteBytes() refuses without
+// touching the bus - and every AT24 write path below is gated on AT24_WRITES.
+#ifdef TAPJIG_TEST
+#define AT24_WRITES 1
+#else
+#define AT24_WRITES 0
+#endif
+
 bool at24csWriteBytes(uint8_t i2cAddr, uint8_t memAddr, const uint8_t *data, uint8_t len) {
+#if !AT24_WRITES
+  (void)i2cAddr; (void)memAddr; (void)data; (void)len;
+  return false;
+#endif
   while (len > 0) {
     uint8_t chunk = AT24_PAGE_SIZE - (memAddr % AT24_PAGE_SIZE);
     if (chunk > len) chunk = len;
@@ -688,8 +702,9 @@ bool isValidTapeWidthMm(uint8_t mm) {
 // v0.02b: the tape width is ALSO kept in the ATmega's own EEPROM (a mirror of
 // the AT24 copy), so it survives even when the external chip is absent,
 // unreadable or refuses writes, and it is what the boot read falls back to.
-// The AT24 copy still wins when valid (it survives a full ATmega erase); each
-// copy heals the other at boot.
+// The AT24 copy (written once by the jig's test firmware, read-only after)
+// wins when valid; the internal copy only fills in when the AT24 is absent or
+// blank. The production firmware never writes the AT24.
 constexpr int EEPROM_HWINFO_MIRROR_LOCATION = 64;
 
 void loadHwInfo() {
@@ -713,8 +728,10 @@ void loadHwInfo() {
     hwInfo.tapeWidthMm = TAPE_WIDTH_UNSET;
     hwInfo.crc = hwInfoCrc(hwInfo);
   }
+#if AT24_WRITES
   if (readOk) at24csWriteBytes(AT24CS02_EEPROM_ADDR, AT24CS02_HWINFO_MEM_ADDR,
                                 reinterpret_cast<uint8_t *>(&hwInfo), sizeof(hwInfo));
+#endif
   if (!mirrorValid) EEPROM.put(EEPROM_HWINFO_MIRROR_LOCATION, hwInfo);
 }
 
@@ -724,12 +741,15 @@ void loadHwInfo() {
 // a nonsense value that later confuses a host's compatibility check.
 bool setTapeWidthMm(uint8_t mm) {
   if (!isValidTapeWidthMm(mm)) return false;
+#if !AT24_WRITES
+  return false; // production build: tape width is factory data on the (write protected) AT24, set by the test firmware
+#else
   hwInfo.tapeWidthMm = mm;
   hwInfo.crc = hwInfoCrc(hwInfo);
-  EEPROM.put(EEPROM_HWINFO_MIRROR_LOCATION, hwInfo); // internal copy: always succeeds
-  at24csWriteBytes(AT24CS02_EEPROM_ADDR, AT24CS02_HWINFO_MEM_ADDR,
-                   reinterpret_cast<uint8_t *>(&hwInfo), sizeof(hwInfo)); // external copy: best effort
-  return true;
+  EEPROM.put(EEPROM_HWINFO_MIRROR_LOCATION, hwInfo); // internal copy: fallback if the AT24 is ever absent
+  return at24csWriteBytes(AT24CS02_EEPROM_ADDR, AT24CS02_HWINFO_MEM_ADDR,
+                          reinterpret_cast<uint8_t *>(&hwInfo), sizeof(hwInfo));
+#endif
 }
 
 // ---------------------------
@@ -858,6 +878,10 @@ constexpr uint8_t ERR_LOCKED = 0x08;       // v0.02: factory serial present, can
 uint8_t lastMoveError = ERR_NONE;
 
 uint8_t programUserSerial(const uint8_t *serial16) {
+#if !AT24_WRITES
+  (void)serial16;
+  return ERR_LOCKED; // production build never writes the AT24 (write protected); use the test firmware
+#else
   if (factorySerialValid) return ERR_LOCKED;
   uint8_t block[FACTORY_SERIAL_LEN + 1];
   memcpy(block, serial16, FACTORY_SERIAL_LEN);
@@ -869,6 +893,7 @@ uint8_t programUserSerial(const uint8_t *serial16) {
   memcpy(factorySerial, serial16, FACTORY_SERIAL_LEN);
   userSerialValid = true;
   return ERR_NONE;
+#endif
 }
 
 // Responding 7-bit I2C addresses, for diagnosing what is actually on the
@@ -1111,7 +1136,7 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
       break;
     }
     case CMD_SET_HW_INFO: {
-      if (len < 1 || !setTapeWidthMm(payload[0])) { sendFrame(CMD_NACK, nullptr, 0); break; }
+      if (len < 1 || !setTapeWidthMm(payload[0])) { const uint8_t e = AT24_WRITES ? ERR_BAD_PARAM : ERR_LOCKED; sendFrame(CMD_NACK, &e, 1); break; }
       sendFrame(CMD_ACK, payload, 1);
       break;
     }
@@ -2575,7 +2600,7 @@ void handleDebugLine(const char *line) {
   }
   if ((arg = CMD_ARG("SETWIDTH "))) {
     if (setTapeWidthMm((uint8_t)parseInt(arg))) printOk();
-    else Serial1.println(F("ERR: 8/12/16/24/32/44/56 only, or AT24CS02 absent"));
+    else Serial1.println(AT24_WRITES ? F("ERR: 8/12/16/24/32/44/56 only, or AT24 write failed") : F("ERR: read-only in production firmware (set by the jig's test firmware)"));
     return;
   }
   if (CMD_IS("SERIAL")) {
