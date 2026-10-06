@@ -57,16 +57,27 @@ Tabs:
   fault, tape width, pitch, zero, feed once, peel rate. Each row has its
   own button. Ticks come from what the feeder reports, so a feeder that
   was set up earlier shows up already done, and a red cross says why.
-- **Feed & peel.** Pitch and Feed once; the **peel rate** (v0.02b: peel
-  follows feed, ms per mm) with a helper that turns a measured peel time
-  for a known feed into a rate; the fixed-time peel (v0.02: Peel once,
-  save/read the saved time, run it); and **Run cycle test**: N cycles of
+- **Feed & peel.** Pitch, Feed once and Back once (with a peel rate saved
+  the peel follows, see below); and **Run cycle test**: N cycles of
   feed / peel in the order you pick, waiting for each ACK and logging how
   long each step took, with min/avg/max at the end. With a peel rate saved
   a feed already peels, so use "feed only" (the GUI warns if a cycle would
   peel twice). On v0.02 and earlier the host-side feed-then-peel cycle is
   the only way to pair them. Nothing overlaps: the feeder doesn't listen
   to the bus while a motor is running.
+- **Peel calibration** (v0.02b). Four blocks. (1) The **peel rate** (ms of
+  peel per mm of feed): save, read, turn off, and **-10/-5/-1/+1/+5/+10 %**
+  fine-tune buttons that save immediately. (2) **Measure it**: **Feed (no
+  peel)** moves the sprocket N mm with jog (which never touches the peel
+  motor), **-250 ... +1000 ms** nudges peel until the cover tape is just
+  taut, **Record measurement** adds a row (mm, ms, ms/mm); repeat a few
+  times, **Use average**. Every nudge starts with a short soft-start ramp,
+  so a few long nudges are closer to a real feed than many short ones; the
+  measured number is a starting point. (3) **Verify**: **Feed (peel
+  follows)**, **Back (peel reverses first)** (`CMD_FEED_BACK`), and N feeds
+  in a row; slack after a feed means raise the rate, a pulled tape or a
+  lifting pocket means lower it, then use the fine-tune buttons. (4) The
+  older fixed-time peel (Peel once, save/read/run the saved time).
 - **Jog & zero** (v0.02+). Buttons jog the sprocket by -4 ... +4 mm
   (4 mm = one tooth) or a custom distance, each reply shows the new raw
   angle, then **Set zero here** stores it as the tape zero. Jog does not

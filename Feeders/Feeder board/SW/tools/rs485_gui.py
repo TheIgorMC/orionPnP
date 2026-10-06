@@ -99,6 +99,7 @@ CMD_SET_LED_BRIGHTNESS = 0x3A
 CMD_SET_PEEL_RATE = 0x3B
 CMD_GET_PEEL_RATE = 0x3C
 CMD_PEEL_RATE_INFO = 0xA6
+CMD_FEED_BACK = 0x3D
 
 # Reply timeouts. FEED_NEXT can legitimately take up to the firmware's
 # MOVE_TIMEOUT_MS (6000) before it NACKs, plus up to 5 s of coupled peel on
@@ -374,6 +375,12 @@ class App:
         self.rate_var = tk.StringVar(value="")
         self.peel_ms_var = tk.StringVar(value="1570")
         self.peel_dir_var = tk.StringVar(value="fwd")
+        self.cal_onfeeder_var = tk.StringVar(value="—")
+        self.cal_mm_var = tk.StringVar(value="4")
+        self.cal_net_var = tk.StringVar(value="0 ms")
+        self.cal_avg_var = tk.StringVar(value="Average: —")
+        self.cal_n_var = tk.StringVar(value="5")
+        self.cal_net_ms = 0
 
         # --- Feeder card (left) + tabs (right) ---
         main = ttk.Frame(self.root)
@@ -388,6 +395,7 @@ class App:
         for key, label, builder in (
                 ("bringup", "Bring-up", self._build_bringup_tab),
                 ("feed", "Feed & peel", self._build_feed_tab),
+                ("peelcal", "Peel calibration", self._build_peelcal_tab),
                 ("jog", "Jog & zero", self._build_jog_tab),
                 ("setup", "Setup", self._build_setup_tab),
                 ("builder", "Packet builder", self._build_builder_tab)):
@@ -486,6 +494,7 @@ class App:
             self._set_ind(key, "off", "—")
         for var in self.cfg_vars.values():
             var.set("—")
+        self.cal_onfeeder_var.set("—")
         self.cfg_state.clear()
         self.config_read_for = None
 
@@ -536,7 +545,7 @@ class App:
         elif key == "feed":
             ttk.Button(f, text="Feed once", command=lambda: self._start_cycle(1, "feed only")).grid(row=0, column=0, **pad)
         elif key == "peelrate":
-            ttk.Button(f, text="Peel ▸", command=lambda: self.tabs.select(self.tab_frames["feed"])).grid(row=0, column=0, **pad)
+            ttk.Button(f, text="Peel ▸", command=lambda: self.tabs.select(self.tab_frames["peelcal"])).grid(row=0, column=0, **pad)
 
     def _set_step(self, key, state, note=""):
         """GUI thread only - workers go through _set_step_ui()."""
@@ -607,57 +616,14 @@ class App:
         ttk.Combobox(feed, textvariable=self.pitch_var, width=6, values=["2", "4", "8", "12", "16", "20", "24"]).grid(row=0, column=1, sticky="w", **pad)
         ttk.Button(feed, text="Set pitch", command=self._do_set_pitch).grid(row=0, column=2, **pad)
         ttk.Button(feed, text="Feed once", command=lambda: self._start_cycle(1, "feed only")).grid(row=0, column=3, **pad)
-        ttk.Label(feed, foreground=COLOR_DIM, text="v0.02b+: a feed also peels once a rate is saved.").grid(
-            row=0, column=4, sticky="w", **pad)
-
-        rate = ttk.LabelFrame(tab, text="Peel rate - peel follows feed (v0.02b+)")
-        rate.grid(row=1, column=0, sticky="ew", **pad)
-        ttk.Label(rate, text="Rate (ms of peel per mm of feed):").grid(row=0, column=0, sticky="e", **pad)
-        ttk.Entry(rate, textvariable=self.rate_var, width=8).grid(row=0, column=1, sticky="w", **pad)
-        ttk.Button(rate, text="Save to feeder", command=self._do_set_peel_rate).grid(row=0, column=2, **pad)
-        ttk.Button(rate, text="Read", command=lambda: self._quick(CMD_GET_PEEL_RATE)).grid(row=0, column=3, **pad)
-        ttk.Button(rate, text="Turn off", command=lambda: self._do_set_peel_rate(off=True)).grid(row=0, column=4, **pad)
-
-        ttk.Label(rate, text="Measured: peel").grid(row=1, column=0, sticky="e", **pad)
-        mrow = ttk.Frame(rate)
-        mrow.grid(row=1, column=1, columnspan=4, sticky="w")
-        self.meas_ms_var = tk.StringVar(value="1570")
-        ttk.Entry(mrow, textvariable=self.meas_ms_var, width=7).grid(row=0, column=0, padx=2)
-        ttk.Label(mrow, text="ms kept the cover tape taut over a").grid(row=0, column=1, padx=2)
-        self.meas_mm_var = tk.StringVar(value="4")
-        ttk.Entry(mrow, textvariable=self.meas_mm_var, width=5).grid(row=0, column=2, padx=2)
-        ttk.Label(mrow, text="mm feed  →").grid(row=0, column=3, padx=2)
-        self.meas_result_var = tk.StringVar()
-        ttk.Label(mrow, textvariable=self.meas_result_var, font=self.bold_font, width=14).grid(row=0, column=4, padx=2)
-        ttk.Button(mrow, text="Use", command=self._use_measured_rate).grid(row=0, column=5, padx=4)
-        self.meas_ms_var.trace_add("write", lambda *_: self._update_rate_helper())
-        self.meas_mm_var.trace_add("write", lambda *_: self._update_rate_helper())
-        self._update_rate_helper()
-
-        ttk.Label(rate, foreground=COLOR_DIM, wraplength=640, justify="left", text=(
-            "Forward feed: sprocket first, then peel forward for rate × mm. Backward seat (SNAP, after homing): "
-            "peel in reverse first, same amount. Fast feed, JOG and MOVEMM leave the peel alone. To find the "
-            "rate, use 'Peel once' below until one 4 mm feed keeps the tape taut, then enter that time here.")
-        ).grid(row=2, column=0, columnspan=5, sticky="w", **pad)
-
-        peel = ttk.LabelFrame(tab, text="Peel motor on its own (fixed time)")
-        peel.grid(row=2, column=0, sticky="ew", **pad)
-        ttk.Label(peel, text="Dir:").grid(row=0, column=0, sticky="e", **pad)
-        ttk.Combobox(peel, textvariable=self.peel_dir_var, width=6, state="readonly", values=["fwd", "rev"]).grid(row=0, column=1, sticky="w", **pad)
-        ttk.Label(peel, text="Time (ms):").grid(row=0, column=2, sticky="e", **pad)
-        ttk.Spinbox(peel, textvariable=self.peel_ms_var, from_=10, to=5000, increment=10, width=7).grid(row=0, column=3, sticky="w", **pad)
-        ttk.Button(peel, text="Peel once", command=lambda: self._start_cycle(1, "peel only")).grid(row=0, column=4, **pad)
-        ttk.Label(peel, foreground=COLOR_DIM, text="10 ms steps; one-off runs up to 2550 ms").grid(row=0, column=5, sticky="w", **pad)
-        ttk.Button(peel, text="Save time to feeder", command=self._do_save_peel_cal).grid(row=1, column=1, columnspan=2, **pad)
-        ttk.Button(peel, text="Read saved", command=lambda: self._quick(CMD_GET_PEEL_TIME)).grid(row=1, column=3, **pad)
-        ttk.Button(peel, text="Run saved (fwd)", command=lambda: self._do_peel_cal_run(0)).grid(row=1, column=4, **pad)
-        ttk.Button(peel, text="(rev)", command=lambda: self._do_peel_cal_run(1)).grid(row=1, column=5, sticky="w", **pad)
-        self.peel_use_cal_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(peel, text="Cycle test peel steps use the saved time", variable=self.peel_use_cal_var).grid(
-            row=2, column=0, columnspan=6, sticky="w", **pad)
+        ttk.Button(feed, text="Back once", command=self._do_feed_back).grid(row=0, column=4, **pad)
+        ttk.Label(feed, foreground=COLOR_DIM, wraplength=640, justify="left", text=(
+            "v0.02b+ with a peel rate saved: Feed once moves the sprocket, then peels; Back once peels in reverse, "
+            "then moves back. Without a rate they only move the sprocket. Set the rate on the Peel calibration tab.")
+        ).grid(row=1, column=0, columnspan=5, sticky="w", **pad)
 
         cyc = ttk.LabelFrame(tab, text="Cycle test")
-        cyc.grid(row=3, column=0, sticky="ew", **pad)
+        cyc.grid(row=1, column=0, sticky="ew", **pad)
         ttk.Label(cyc, text="Cycle:").grid(row=0, column=0, sticky="e", **pad)
         self.order_var = tk.StringVar(value=CYCLE_ORDERS[2])
         ttk.Combobox(cyc, textvariable=self.order_var, width=16, state="readonly", values=CYCLE_ORDERS).grid(row=0, column=1, columnspan=2, sticky="w", **pad)
@@ -669,10 +635,117 @@ class App:
         ttk.Spinbox(cyc, textvariable=self.pause_var, from_=0, to=10000, increment=100, width=7).grid(row=0, column=6, sticky="w", **pad)
         ttk.Button(cyc, text="Run cycle test", command=lambda: self._start_cycle(None, None)).grid(row=0, column=7, **pad)
         ttk.Label(cyc, foreground=COLOR_DIM, wraplength=640, justify="left", text=(
-            "Each step logs its round-trip time. With a peel rate saved use 'feed only' (the feed already peels); "
-            "the 'then peel' orders are for older firmware or a fixed peel time.")
+            "Each step logs its round-trip time, with min/avg/max at the end. With a peel rate saved use 'feed only' "
+            "(the feed already peels); the 'then peel' orders are for older firmware or a fixed peel time "
+            "(Peel calibration tab, bottom).")
         ).grid(row=1, column=0, columnspan=8, sticky="w", **pad)
         return tab
+
+    # --- Peel calibration tab ---
+    PEEL_NUDGES_MS = (50, 100, 250, 500, 1000)
+
+    def _build_peelcal_tab(self, parent):
+        pad = {"padx": 4, "pady": 3}
+        tab = ttk.Frame(parent)
+        tab.columnconfigure(0, weight=1)
+
+        # 1. rate
+        rate = ttk.LabelFrame(tab, text="1. Peel rate: ms of peel per mm of feed (v0.02b+)")
+        rate.grid(row=0, column=0, sticky="ew", **pad)
+        ttk.Label(rate, text="Rate:").grid(row=0, column=0, sticky="e", **pad)
+        ttk.Entry(rate, textvariable=self.rate_var, width=8, font=self.bold_font).grid(row=0, column=1, sticky="w", **pad)
+        ttk.Button(rate, text="Save to feeder", command=self._do_set_peel_rate).grid(row=0, column=2, **pad)
+        ttk.Button(rate, text="Read", command=lambda: self._quick(CMD_GET_PEEL_RATE)).grid(row=0, column=3, **pad)
+        ttk.Button(rate, text="Turn off", command=lambda: self._do_set_peel_rate(off=True)).grid(row=0, column=4, **pad)
+        ttk.Label(rate, text="On the feeder:").grid(row=0, column=5, sticky="e", **pad)
+        ttk.Label(rate, textvariable=self.cal_onfeeder_var, font=self.bold_font, width=18).grid(row=0, column=6, sticky="w", **pad)
+        ttk.Label(rate, text="Fine-tune (saves at once):").grid(row=1, column=0, columnspan=2, sticky="e", **pad)
+        tune = ttk.Frame(rate)
+        tune.grid(row=1, column=2, columnspan=5, sticky="w")
+        for i, pct in enumerate((-10, -5, -1, 1, 5, 10)):
+            ttk.Button(tune, text=f"{pct:+d}%", width=6, command=lambda v=pct: self._calib_adjust(v)).grid(row=0, column=i, padx=2)
+
+        # 2. measure
+        meas = ttk.LabelFrame(tab, text="2. Measure it (optional - or just guess a rate and fine-tune in step 3)")
+        meas.grid(row=1, column=0, sticky="ew", **pad)
+        ttk.Label(meas, text="Feed").grid(row=0, column=0, sticky="e", **pad)
+        ttk.Combobox(meas, textvariable=self.cal_mm_var, width=5, values=["2", "4", "8", "12", "16"]).grid(row=0, column=1, sticky="w", **pad)
+        ttk.Label(meas, text="mm with no peel").grid(row=0, column=2, sticky="w", **pad)
+        ttk.Button(meas, text="Feed (no peel)", command=self._calib_feed_plain).grid(row=0, column=3, **pad)
+        ttk.Label(meas, foreground=COLOR_DIM, text="uses jog, which never touches the peel motor").grid(row=0, column=4, columnspan=4, sticky="w", **pad)
+
+        ttk.Label(meas, text="Peel until taut:").grid(row=1, column=0, sticky="e", **pad)
+        nud = ttk.Frame(meas)
+        nud.grid(row=1, column=1, columnspan=7, sticky="w")
+        col = 0
+        for ms in reversed(self.PEEL_NUDGES_MS[:3]):
+            ttk.Button(nud, text=f"-{ms}", width=6, command=lambda m=ms: self._calib_nudge(1, m)).grid(row=0, column=col, padx=1)
+            col += 1
+        ttk.Label(nud, text=" ms ").grid(row=0, column=col)
+        col += 1
+        for ms in self.PEEL_NUDGES_MS:
+            ttk.Button(nud, text=f"+{ms}", width=6, command=lambda m=ms: self._calib_nudge(0, m)).grid(row=0, column=col, padx=1)
+            col += 1
+
+        ttk.Label(meas, text="This round:").grid(row=2, column=0, sticky="e", **pad)
+        ttk.Label(meas, textvariable=self.cal_net_var, font=self.bold_font, width=10).grid(row=2, column=1, columnspan=2, sticky="w", **pad)
+        ttk.Button(meas, text="Reset round", command=lambda: self._calib_set_net(0)).grid(row=2, column=3, **pad)
+        ttk.Button(meas, text="Record measurement", command=self._calib_record).grid(row=2, column=4, columnspan=2, **pad)
+
+        self.cal_tree = ttk.Treeview(meas, columns=("n", "mm", "ms", "rate"), show="headings", height=4, selectmode="browse")
+        for colname, text, w in (("n", "#", 40), ("mm", "Feed (mm)", 90), ("ms", "Peel (ms)", 90), ("rate", "ms/mm", 90)):
+            self.cal_tree.heading(colname, text=text)
+            self.cal_tree.column(colname, width=w, anchor="center")
+        self.cal_tree.grid(row=3, column=0, columnspan=4, sticky="w", **pad)
+        side = ttk.Frame(meas)
+        side.grid(row=3, column=4, columnspan=4, sticky="nw", **pad)
+        ttk.Label(side, textvariable=self.cal_avg_var, font=self.bold_font, wraplength=260, justify="left").grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Button(side, text="Use average", command=self._calib_use_average).grid(row=1, column=0, pady=2)
+        ttk.Button(side, text="Delete row", command=self._calib_delete_row).grid(row=1, column=1, padx=2, pady=2)
+        ttk.Button(side, text="Clear", command=self._calib_clear).grid(row=1, column=2, pady=2)
+        ttk.Label(meas, foreground=COLOR_DIM, wraplength=700, justify="left", text=(
+            "Every nudge starts with a short soft-start ramp, so a few long nudges match a real feed better than many "
+            "short ones; the number is a starting point, step 3 is the real test. Feed, nudge + until the cover tape "
+            "is just taut (- to back off), Record, repeat a few times, Use average, Save to feeder.")
+        ).grid(row=4, column=0, columnspan=8, sticky="w", **pad)
+
+        # 3. verify
+        ver = ttk.LabelFrame(tab, text="3. Verify with the real thing (peel follows feed)")
+        ver.grid(row=2, column=0, sticky="ew", **pad)
+        ttk.Button(ver, text="Feed (peel follows)", command=lambda: self._start_cycle(1, "feed only")).grid(row=0, column=0, **pad)
+        ttk.Button(ver, text="Back (peel reverses first)", command=self._do_feed_back).grid(row=0, column=1, **pad)
+        ttk.Label(ver, text="Run").grid(row=0, column=2, sticky="e", **pad)
+        ttk.Spinbox(ver, textvariable=self.cal_n_var, from_=1, to=200, width=5).grid(row=0, column=3, **pad)
+        ttk.Button(ver, text="feeds in a row", command=lambda: self._start_cycle(self._int_or(self.cal_n_var.get(), 5), "feed only")).grid(row=0, column=4, **pad)
+        ttk.Label(ver, foreground=COLOR_DIM, wraplength=700, justify="left", text=(
+            "Cover tape slack or bunching up after a feed: rate too low, use +. Tape being pulled, or the next pocket "
+            "lifting: rate too high, use -. A backward move should leave a little slack, never pull. The pause between "
+            "feeds is the Cycle test pause on the Feed & peel tab.")
+        ).grid(row=1, column=0, columnspan=6, sticky="w", **pad)
+
+        # 4. fixed time
+        fixed = ttk.LabelFrame(tab, text="Fixed-time peel (v0.02; not tied to feed distance)")
+        fixed.grid(row=3, column=0, sticky="ew", **pad)
+        ttk.Label(fixed, text="Dir:").grid(row=0, column=0, sticky="e", **pad)
+        ttk.Combobox(fixed, textvariable=self.peel_dir_var, width=6, state="readonly", values=["fwd", "rev"]).grid(row=0, column=1, sticky="w", **pad)
+        ttk.Label(fixed, text="Time (ms):").grid(row=0, column=2, sticky="e", **pad)
+        ttk.Spinbox(fixed, textvariable=self.peel_ms_var, from_=10, to=5000, increment=10, width=7).grid(row=0, column=3, sticky="w", **pad)
+        ttk.Button(fixed, text="Peel once", command=lambda: self._start_cycle(1, "peel only")).grid(row=0, column=4, **pad)
+        ttk.Button(fixed, text="Save time to feeder", command=self._do_save_peel_cal).grid(row=1, column=0, columnspan=3, **pad)
+        ttk.Button(fixed, text="Read saved", command=lambda: self._quick(CMD_GET_PEEL_TIME)).grid(row=1, column=3, **pad)
+        ttk.Button(fixed, text="Run saved (fwd)", command=lambda: self._do_peel_cal_run(0)).grid(row=1, column=4, **pad)
+        ttk.Button(fixed, text="(rev)", width=6, command=lambda: self._do_peel_cal_run(1)).grid(row=1, column=5, sticky="w", **pad)
+        self.peel_use_cal_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(fixed, text="Cycle test peel steps use the saved time", variable=self.peel_use_cal_var).grid(
+            row=2, column=0, columnspan=9, sticky="w", **pad)
+        return tab
+
+    @staticmethod
+    def _int_or(text, default):
+        try:
+            return max(1, int(text))
+        except ValueError:
+            return default
 
     # --- Setup tab ---
     def _build_setup_tab(self, parent):
@@ -1024,6 +1097,7 @@ class App:
             t = (p[0] << 8) | p[1]
             self.cfg_state["peel_rate"] = t
             self.cfg_vars["peelrate"].set("off (no coupling)" if t == 0xFFFF else f"{t / 10:.1f} ms/mm")
+            self.cal_onfeeder_var.set("off" if t == 0xFFFF else f"{t / 10:.1f} ms/mm")
             self._set_step("peelrate", None if t == 0xFFFF else "ok", "off" if t == 0xFFFF else f"{t / 10:.1f} ms/mm")
             if t != 0xFFFF and not self.rate_var.get():
                 self.rate_var.set(f"{t / 10:g}")
@@ -1204,23 +1278,95 @@ class App:
                 self._step_from_frame("pitch", frame)
         self._start_worker("set pitch", run)
 
-    def _update_rate_helper(self):
-        try:
-            ms = float(self.meas_ms_var.get())
-            mm = float(self.meas_mm_var.get())
-            self.meas_result_var.set(f"{ms / mm:.1f} ms/mm" if mm > 0 and ms > 0 else "")
-        except ValueError:
-            self.meas_result_var.set("")
+    # --- Peel calibration helpers ---
+    def _calib_set_net(self, ms):
+        self.cal_net_ms = ms
+        self.cal_net_var.set(f"{ms:+d} ms" if ms else "0 ms")
 
-    def _use_measured_rate(self):
-        try:
-            ms, mm = float(self.meas_ms_var.get()), float(self.meas_mm_var.get())
-            if ms <= 0 or mm <= 0:
-                raise ValueError
-        except ValueError:
-            self._log("Enter positive ms and mm values first.", "err")
+    def _calib_feed_plain(self):
+        addr = self._parse_addr(self.addr_var, "target address")
+        if addr is None:
             return
-        self.rate_var.set(f"{ms / mm:.1f}")
+        try:
+            mm = float(self.cal_mm_var.get())
+            payload = COMMAND_SPECS[CMD_JOG].encode([str(mm)])
+        except ValueError as exc:
+            self._log(f"Bad feed distance: {exc}", "err")
+            return
+        self._start_worker(f"feed {mm:g} mm, no peel", lambda: self._req(
+            addr, CMD_JOG, payload, timeout_s=FEED_REPLY_TIMEOUT_S))
+
+    def _calib_nudge(self, direction, ms):
+        addr = self._parse_addr(self.addr_var, "target address")
+        if addr is None:
+            return
+        payload = bytes([direction, ms // 10])
+
+        def run():
+            frame, _ = self._req(addr, CMD_PEEL, payload, timeout_s=ms / 1000.0 + PEEL_REPLY_MARGIN_S)
+            if frame is not None and frame.cmd == CMD_ACK:
+                delta = -ms if direction else ms
+                self._ui(lambda: self._calib_set_net(self.cal_net_ms + delta))
+        self._start_worker(f"peel {'back ' if direction else ''}{ms} ms", run)
+
+    def _calib_record(self):
+        try:
+            mm = float(self.cal_mm_var.get())
+        except ValueError:
+            self._log("Set the feed distance first.", "err")
+            return
+        if self.cal_net_ms <= 0 or mm <= 0:
+            self._log("Nothing to record: peel forward until the tape is taut first (this round is not above 0 ms).", "err")
+            return
+        n = len(self.cal_tree.get_children()) + 1
+        self.cal_tree.insert("", "end", values=(n, f"{mm:g}", self.cal_net_ms, f"{self.cal_net_ms / mm:.1f}"))
+        self._calib_set_net(0)
+        self._calib_update_avg()
+
+    def _calib_rates(self):
+        return [float(self.cal_tree.item(i, "values")[3]) for i in self.cal_tree.get_children()]
+
+    def _calib_update_avg(self):
+        rates = self._calib_rates()
+        if not rates:
+            self.cal_avg_var.set("Average: —")
+            return
+        spread = f"  (spread {min(rates):.1f}-{max(rates):.1f})" if len(rates) > 1 else ""
+        self.cal_avg_var.set(f"Average: {statistics.mean(rates):.1f} ms/mm  n={len(rates)}{spread}")
+
+    def _calib_use_average(self):
+        rates = self._calib_rates()
+        if not rates:
+            self._log("Record at least one measurement first.", "err")
+            return
+        self.rate_var.set(f"{statistics.mean(rates):.1f}")
+
+    def _calib_delete_row(self):
+        for item in self.cal_tree.selection():
+            self.cal_tree.delete(item)
+        self._calib_update_avg()
+
+    def _calib_clear(self):
+        self.cal_tree.delete(*self.cal_tree.get_children())
+        self._calib_update_avg()
+
+    def _calib_adjust(self, pct):
+        try:
+            rate = float(self.rate_var.get())
+        except ValueError:
+            self._log("Enter a rate first (or press Read).", "err")
+            return
+        new = max(0.5, min(500.0, round(rate * (1 + pct / 100.0), 1)))
+        if new == rate:  # a 1% step on a small rate rounds away - move by the 0.1 resolution instead
+            new = max(0.5, min(500.0, round(rate + (0.1 if pct > 0 else -0.1), 1)))
+        self.rate_var.set(f"{new:g}")
+        self._do_set_peel_rate()
+
+    def _do_feed_back(self):
+        addr = self._parse_addr(self.addr_var, "target address")
+        if addr is not None:
+            self._start_worker("back one pitch", lambda: self._req(
+                addr, CMD_FEED_BACK, timeout_s=FEED_REPLY_TIMEOUT_S))
 
     def _do_set_peel_rate(self, off=False):
         addr = self._parse_addr(self.addr_var, "target address")

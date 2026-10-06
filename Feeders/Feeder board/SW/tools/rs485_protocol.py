@@ -50,6 +50,7 @@ CMD_NAMES = {
     0x3A: "CMD_SET_LED_BRIGHTNESS",
     0x3B: "CMD_SET_PEEL_RATE",
     0x3C: "CMD_GET_PEEL_RATE", 0xA6: "CMD_PEEL_RATE_INFO",
+    0x3D: "CMD_FEED_BACK",
     0x82: "CMD_ACK",
     0x83: "CMD_NACK",
 }
@@ -504,6 +505,9 @@ COMMAND_SPECS = {
                   notes="v0.02b+. A forward feed peels forward AFTER the sprocket moves; a backward seat peels in reverse BEFORE it moves. "
                         "Feed replies take longer by the peel time. Unset = no coupling."),
     0x3C: CmdSpec("Read the peel rate.", "CMD_PEEL_RATE_INFO: tenths of ms/mm (0xFFFF = unset)", notes="v0.02b+."),
+    0x3D: CmdSpec("Back the sprocket up by one configured pitch; with a peel rate saved, the peel runs in reverse first.",
+                  "CMD_ACK, or CMD_NACK [errCode] (ERR_NOT_READY if no pitch is set)",
+                  notes="v0.02b+. The mirror of CMD_FEED_NEXT. Blocks for the move plus the peel."),
 }
 
 

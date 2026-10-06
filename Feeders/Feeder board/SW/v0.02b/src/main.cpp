@@ -16,9 +16,12 @@
     and a backwards seat (snapToToothBackward) run the peel motor in
     reverse BEFORE the sprocket goes back, by the same amount. Unset rate
     = no coupling (v0.02 behaviour).
-  - Buttons: SW1+SW2 together toggle feed mode (blue) / peel mode (green).
-    In peel mode SW1 peels forward and SW2 peels in reverse, while held.
-    Peel mode drops back to feed mode after PEEL_MODE_IDLE_TIMEOUT_MS.
+  - Buttons: three modes, SW1 = forward / SW2 = reverse in each - feed only
+    (blue, boot default), peel only (orange), feed+peel (green). SW1+SW2
+    together step to the next. Peel-only drops back to feed-only after
+    PEEL_MODE_IDLE_TIMEOUT_MS.
+  - Status RGB flashes green when a frame addressed to this feeder arrives.
+  - CMD_FEED_BACK: the mirror of CMD_FEED_NEXT (peel reversed first).
   See project.md.
 
   v0.02 - forked from v0.01a. Adds, on top of everything below:
@@ -726,6 +729,7 @@ void setTapeZeroHere();
 void setFeedPitchMm(float mm);
 uint8_t feedOnePitch(unsigned long timeoutMs);
 uint8_t moveFeedCoupled(float mm, unsigned long timeoutMs);
+float mmForHalfTeeth(uint8_t halfTeeth);
 void applyLedBrightness();
 void flashRxLed();
 void setExtLed(bool on);
@@ -870,6 +874,7 @@ constexpr uint8_t CMD_JOG = 0x37;           // payload: [hi,lo] signed 0.1mm uni
 constexpr uint8_t CMD_I2C_SCAN = 0x38;      // -> CMD_I2C_SCAN_INFO - v0.02
 constexpr uint8_t CMD_I2C_SCAN_INFO = 0xA5; // payload: responding 7-bit addresses (up to 16)
 constexpr uint8_t CMD_SET_SERIAL = 0x39;    // payload: 16 serial bytes -> CMD_ACK / CMD_NACK [ERR_LOCKED|ERR_I2C] - v0.02, plain AT24C02 only
+constexpr uint8_t CMD_FEED_BACK = 0x3D;     // no payload: back by the configured pitch, peel reversed first if a PeelRate is set -> CMD_ACK / CMD_NACK [errCode] - v0.02b
 constexpr uint8_t CMD_SET_LED_BRIGHTNESS = 0x3A; // payload: [level 1-255] -> CMD_ACK (echo) / CMD_NACK ERR_BAD_PARAM - v0.02b, status RGB, persisted
 constexpr uint8_t CMD_SET_PEEL_RATE = 0x3B; // payload: [hi,lo] 0.1 ms-of-peel per mm of feed (5-5000, 0 = clear/off) -> CMD_ACK (echo) / CMD_NACK ERR_BAD_PARAM - v0.02b, persisted
 constexpr uint8_t CMD_GET_PEEL_RATE = 0x3C; // -> CMD_PEEL_RATE_INFO
@@ -1059,6 +1064,13 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
     case CMD_GET_PEEL_TIME: {
       const uint8_t reply[2] = { (uint8_t)(peelCal.peelMs >> 8), (uint8_t)(peelCal.peelMs & 0xFF) };
       sendFrame(CMD_PEEL_TIME_INFO, reply, sizeof(reply));
+      break;
+    }
+    case CMD_FEED_BACK: {
+      if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) { const uint8_t e = ERR_NOT_READY; lastMoveError = e; sendFrame(CMD_NACK, &e, 1); break; }
+      const uint8_t err = moveFeedCoupled(-mmForHalfTeeth(cfg.feedHalfTeeth), MOVE_TIMEOUT_MS);
+      if (err == ERR_NONE) sendFrame(CMD_ACK, nullptr, 0);
+      else sendFrame(CMD_NACK, &err, 1);
       break;
     }
     case CMD_SET_LED_BRIGHTNESS: {
@@ -1568,9 +1580,10 @@ Adafruit_NeoPixel statusLed(1, PIN_RGB_DATA, NEO_GRB + NEO_KHZ800);
 
 // Release status colors (v0.01a):
 //   yellow = booting, not ready yet
-//   green flash = a frame addressed to this feeder just arrived (blue flash in peel mode)
-//   green  = ready, PEEL control mode (v0.02b, SW1+SW2 toggles)
-//   blue   = ready (booted, magnet detected)
+//   green flash = a frame addressed to this feeder just arrived (blue flash in feed+peel mode)
+//   blue   = ready, buttons in FEED-only mode (booted, magnet detected)
+//   orange = ready, buttons in PEEL-only mode (v0.02b, SW1+SW2 steps modes)
+//   green  = ready, buttons in FEED+PEEL mode
 //   red    = error (no magnet, or DRV8833 fault)
 //   purple = a motor is moving (feed or peel)
 //   white  = IDENTIFY blink
@@ -1596,9 +1609,14 @@ void applyLedBrightness() {
   }
 }
 
-// Button control mode (v0.02b): feed (blue) or peel (green). SW1+SW2
-// together toggle it - see handleButtons().
-bool peelMode = false;
+// Button control mode (v0.02b), SW1+SW2 together step through them - see
+// handleButtons(). Boot default is feed-only: loading tape is done by hand
+// first, then the cover tape is tensioned (peel-only), then both together.
+//   MODE_FEED (blue)   - sprocket only, no peel
+//   MODE_PEEL (orange) - peel motor only
+//   MODE_BOTH (green)  - feed with the peel following (PeelRate)
+enum ButtonMode : uint8_t { MODE_FEED, MODE_PEEL, MODE_BOTH };
+ButtonMode buttonMode = MODE_FEED;
 
 // Bus activity cue (v0.02b): a short flash whenever a frame addressed to
 // THIS feeder arrives (unicast or broadcast), plus its discovery/assign
@@ -1612,11 +1630,15 @@ unsigned long rxFlashUntilMs = 0;
 
 void flashRxLed() {
   rxFlashUntilMs = millis() + RX_FLASH_MS;
-  if (peelMode) setStatusLedColor(0, 0, 255); else setStatusLedColor(0, 255, 0);
+  if (buttonMode == MODE_BOTH) setStatusLedColor(0, 0, 255); else setStatusLedColor(0, 255, 0);
 }
 
 void ledBooting() { setStatusLedColor(255, 255, 0); }
-void ledReady()   { if (peelMode) setStatusLedColor(0, 255, 0); else setStatusLedColor(0, 0, 255); }
+void ledReady() {
+  if (buttonMode == MODE_PEEL) setStatusLedColor(255, 90, 0);
+  else if (buttonMode == MODE_BOTH) setStatusLedColor(0, 255, 0);
+  else setStatusLedColor(0, 0, 255);
+}
 void ledError()   { setStatusLedColor(255, 0, 0); }
 void ledMoving()  { setStatusLedColor(160, 0, 255); }
 void ledOff()     { setStatusLedColor(0, 0, 0); }
@@ -1752,19 +1774,27 @@ uint8_t fastFeedTurn();
 bool sw1SeenReleased = false;
 bool sw2SeenReleased = false;
 
-// v0.02b button scheme. Two modes, shown on the status RGB:
-//   FEED mode (blue):  SW1 short = feed one tooth (with coupled peel, see
-//                      moveFeedCoupled), SW1 hold >= SW1_LONG_PRESS_MS =
-//                      fast feed one turn. SW2 does nothing yet (final role
-//                      TODO: UNFEED).
-//   PEEL mode (green): SW1 = peel forward, SW2 = peel in reverse, each only
-//                      while held (PEEL_HOLD_MAX_MS cap) - tensioning by feel.
-// SW1+SW2 pressed together toggle the mode. PEEL mode falls back to FEED
-// after PEEL_MODE_IDLE_TIMEOUT_MS without a press so a forgotten mode
-// can't turn the next SW1 press into an unexpected peel.
+// v0.02b button scheme. Three modes, shown on the status RGB. In every mode
+// SW1 = forward and SW2 = reverse:
+//   FEED only (blue, boot default): SW1 short = feed one tooth, SW1 hold >=
+//       SW1_LONG_PRESS_MS = fast feed one turn (tape loading); SW2 short =
+//       back one tooth. No peel.
+//   PEEL only (orange): SW1 = peel forward, SW2 = peel reverse, each only
+//       while held (PEEL_HOLD_MAX_MS cap) - tensioning the cover tape by feel.
+//   FEED+PEEL (green): SW1 = feed one tooth then peel (moveFeedCoupled),
+//       SW2 = peel in reverse then back one tooth. Needs a PeelRate for the
+//       peel part; without one it behaves like feed-only.
+// SW1+SW2 pressed together step FEED -> PEEL -> FEED+PEEL -> FEED. PEEL-only
+// falls back to FEED-only after PEEL_MODE_IDLE_TIMEOUT_MS without a press so
+// a forgotten mode can't turn the next SW1 press into an unexpected peel.
 constexpr unsigned long CHORD_WINDOW_MS = 80;
-constexpr unsigned long PEEL_MODE_IDLE_TIMEOUT_MS = 30000;
+constexpr unsigned long PEEL_MODE_IDLE_TIMEOUT_MS = 120000;
 unsigned long lastButtonActivityMs = 0;
+
+void printButtonMode() {
+  Serial1.print(F("mode "));
+  Serial1.println(buttonMode == MODE_FEED ? F("feed only") : (buttonMode == MODE_PEEL ? F("peel only") : F("feed+peel")));
+}
 
 void peelWhileHeld(uint8_t pin, bool forward) {
   const int activeLevel = BUTTONS_ACTIVE_LOW ? LOW : HIGH;
@@ -1787,8 +1817,8 @@ void handleButtons(unsigned long &lastEdgeMs) {
   if (!raw1) sw1SeenReleased = true;
   if (!raw2) sw2SeenReleased = true;
 
-  if (peelMode && millis() - lastButtonActivityMs > PEEL_MODE_IDLE_TIMEOUT_MS) {
-    peelMode = false;
+  if (buttonMode == MODE_PEEL && millis() - lastButtonActivityMs > PEEL_MODE_IDLE_TIMEOUT_MS) {
+    buttonMode = MODE_FEED;
     Serial1.println(F("feed mode (idle)"));
   }
 
@@ -1809,22 +1839,26 @@ void handleButtons(unsigned long &lastEdgeMs) {
   lastButtonActivityMs = millis();
 
   if (d1 && d2) {
-    peelMode = !peelMode;
-    Serial1.println(peelMode ? F("peel mode (SW1 fwd, SW2 rev)") : F("feed mode"));
+    buttonMode = (ButtonMode)((buttonMode + 1) % 3);
+    printButtonMode();
     while (digitalRead(PIN_SW1) == activeLevel || digitalRead(PIN_SW2) == activeLevel) delay(1);
-  } else if (peelMode) {
+  } else if (buttonMode == MODE_PEEL) {
     peelWhileHeld(d1 ? PIN_SW1 : PIN_SW2, d1);
   } else if (d1) {
     while (digitalRead(PIN_SW1) == activeLevel && millis() - start < SW1_LONG_PRESS_MS) delay(1);
-    if (digitalRead(PIN_SW1) == activeLevel) {
+    if (digitalRead(PIN_SW1) == activeLevel && buttonMode == MODE_FEED) {
       Serial1.println(F("fast feed"));
       fastFeedTurn();
       while (digitalRead(PIN_SW1) == activeLevel) delay(1); // one turn per hold
-    } else {
+    } else if (buttonMode == MODE_BOTH) {
       moveFeedCoupled(SPROCKET_HOLE_PITCH_MM, MOVE_TIMEOUT_MS);
+      while (digitalRead(PIN_SW1) == activeLevel) delay(1); // one tooth per press, even if held
+    } else {
+      moveByMm(SPROCKET_HOLE_PITCH_MM, MOVE_TIMEOUT_MS);
     }
   } else {
-    Serial1.println(F("SW2 unused in feed mode (SW1+SW2 = peel mode)"));
+    if (buttonMode == MODE_BOTH) moveFeedCoupled(-SPROCKET_HOLE_PITCH_MM, MOVE_TIMEOUT_MS);
+    else moveByMm(-SPROCKET_HOLE_PITCH_MM, MOVE_TIMEOUT_MS);
     while (digitalRead(PIN_SW2) == activeLevel) delay(1);
   }
   lastEdgeMs = millis();
@@ -2256,7 +2290,7 @@ void printStatus() {
   Serial1.print(F(" led="));
   Serial1.print(ledCfg.brightness);
   Serial1.print(F(" mode="));
-  Serial1.println(peelMode ? F("peel") : F("feed"));
+  Serial1.println(buttonMode == MODE_FEED ? F("feed") : (buttonMode == MODE_PEEL ? F("peel") : F("both")));
 
   Serial1.print(F("angle="));
   Serial1.print(readAngleDeg(), 2);
@@ -2278,7 +2312,7 @@ void printStatus() {
 
 void printHelp() {
   Serial1.println(F(
-    "Buttons: SW1=feed 1 tooth, SW1 hold=fast feed 1 turn | SW1+SW2 = toggle feed(blue)/peel(green) mode; peel mode: SW1 hold=peel fwd, SW2 hold=peel rev\n"
+    "Buttons: SW1 fwd / SW2 rev. SW1+SW2 = next mode: FEED only (blue; SW1 hold=fast feed) > PEEL only (orange; hold) > FEED+PEEL (green) | MODE [FEED|PEEL|BOTH]\n"
     "Move : STEP <teeth> | T<n> | A<deg> | MOVEMM <mm> | FEED | FASTFEED | SNAP | GOTOZERO | GOMM <mm> | STOP\n"
     "Peel : PEEL <ms>  (negative = reverse, max 5000) | PEELCAL [<ms>] | PEELRUN [REV] | PEELRATE [<ms/mm>] (0=off; feed peels after, seat un-peels first)\n"
     "Tape : ZEROHERE | PITCH <mm> | COMPONENT <id> | FEEDCFG <raw> <halfTeeth> | RESETCFG\n"
@@ -2450,6 +2484,10 @@ void handleDebugLine(const char *line) {
     printOk();
     return;
   }
+  if (CMD_IS("MODE")) { printButtonMode(); return; }
+  if (CMD_IS("MODE FEED")) { buttonMode = MODE_FEED; lastButtonActivityMs = millis(); printButtonMode(); return; }
+  if (CMD_IS("MODE PEEL")) { buttonMode = MODE_PEEL; lastButtonActivityMs = millis(); printButtonMode(); return; }
+  if (CMD_IS("MODE BOTH")) { buttonMode = MODE_BOTH; lastButtonActivityMs = millis(); printButtonMode(); return; }
   if (CMD_IS("PEELRATE")) {
     if (peelRate.tenthsMsPerMm == PEEL_RATE_UNSET) Serial1.println(F("peelrate unset (no feed/peel coupling) - PEELRATE <ms/mm>"));
     else { Serial1.print(F("peelrate ")); Serial1.print(peelRate.tenthsMsPerMm / 10.0f, 1); Serial1.println(F("ms/mm")); }

@@ -89,6 +89,14 @@ class SimFeeder:
             self._angle_after(mm)
             time.sleep(self.peel_time_for(mm))
             ack()
+        elif c == 0x3D:
+            if self.half_teeth == 0xFF:
+                return nack(ERR_NOT_READY)
+            mm = self.half_teeth * 2.0
+            time.sleep(self.peel_time_for(mm))
+            time.sleep(0.4)
+            self._angle_after(-mm)
+            ack()
         elif c == 0x34:
             if len(p) == 1:
                 if self.peel_ms == 0xFFFF:

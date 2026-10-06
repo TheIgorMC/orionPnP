@@ -102,6 +102,7 @@ see **Error codes** below; otherwise empty).
 | `CMD_SET_LED_BRIGHTNESS` | `0x3A` | **v0.02b+** — `[level]` (1–255) | `CMD_ACK` (echo) / `CMD_NACK [ERR_BAD_PARAM]` | status RGB brightness, saved in internal EEPROM (default 40). Applied immediately |
 | `CMD_SET_PEEL_RATE` | `0x3B` | **v0.02b+** — `[hi,lo]` in 0.1 ms-of-peel per mm of sprocket travel (5–5000; `0` = off) | `CMD_ACK` (echo) / `CMD_NACK [ERR_BAD_PARAM]` | couples peel to feed. A forward feed (`CMD_FEED_NEXT`, SW1) moves the sprocket, **then** peels forward for `rate × mm`. A backward seat (`SNAP`, post-homing) peels in **reverse first**, by the same `rate × mm`, then moves. Not applied to `CMD_JOG`, fast feed, `MOVEMM`/`GOMM`. `CMD_FEED_NEXT`'s reply now arrives after the peel too (peel is capped at 5 s). Per feeder, internal EEPROM, independent of the component |
 | `CMD_GET_PEEL_RATE` | `0x3C` | **v0.02b+** — — | `CMD_PEEL_RATE_INFO` (`0xA6`): `[hi,lo]` | `0xFFFF` = unset (no coupling) |
+| `CMD_FEED_BACK` | `0x3D` | **v0.02b+** — — | `CMD_ACK` / `CMD_NACK [errCode]` | the mirror of `CMD_FEED_NEXT`: back up by the configured pitch; with a peel rate set, peel in **reverse first**, then move. `ERR_NOT_READY` if no pitch is set. Blocks for the move plus the peel |
 
 ## Error codes
 

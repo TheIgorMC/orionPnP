@@ -34,8 +34,8 @@ magnet / driver fault), purple = motor moving, white = IDENTIFY.
 | `IDENTIFY [n]` | **alpha02+** — blink status LED white `n` times (default 3), mirrors `CMD_IDENTIFY` |
 | `LEDBRIGHT [<1-255>]` | **v0.02b+** — show / set status RGB brightness (saved, default 40) |
 | `PEELRATE [<ms/mm>]` | **v0.02b+** — show / set peel per mm of feed (saved; `0` = off). With a rate set, `FEED`/SW1 peel forward after the sprocket moves, `SNAP` peels in reverse before it moves back. Not used by `FASTFEED`/`MOVEMM`/`GOMM`/`JOG` |
-| *buttons* | **v0.02b+** — SW1+SW2 together toggle feed mode (blue) / peel mode (green). Feed: SW1 = feed a tooth (long = fast feed), SW2 unused. Peel: SW1 held = peel fwd, SW2 held = peel rev. Peel mode times out to feed after 30 s |
-| *status LED* | **v0.02b+** — blue = ready (feed mode), green = ready (peel mode), purple = moving, red = error, yellow = booting, white = identify. A short **green flash** (blue in peel mode) means a frame addressed to this feeder just arrived |
+| *buttons* | **v0.02b+** — SW1 = forward, SW2 = reverse, in three modes; SW1+SW2 together step to the next. **Feed only** (blue, boot default): SW1 = feed a tooth (hold = fast feed), SW2 = back a tooth, no peel. **Peel only** (orange): SW1 / SW2 held = peel fwd / rev. **Feed+peel** (green): SW1 = feed then peel, SW2 = peel reverse then back a tooth (needs a peel rate). Peel-only drops back to feed-only after 2 min idle. `MODE [FEED\|PEEL\|BOTH]` shows / sets it from the debug port |
+| *status LED* | **v0.02b+** — blue = ready, feed-only mode; orange = ready, peel-only mode; green = ready, feed+peel mode; purple = moving; red = error; yellow = booting; white = identify. A short **green flash** (blue in feed+peel mode) means a frame addressed to this feeder just arrived |
 | `SETWIDTH <mm>` | **alpha02+** — set this unit's tape width (8/12/16/24/32/44/56), assembly/bench-time, mirrors `CMD_SET_HW_INFO` (alpha02: ATmega EEPROM; alpha03+: AT24CS02) |
 | `SERIAL` | **alpha03+** — print the AT24CS02's factory-programmed 128-bit serial number as hex, mirrors `CMD_GET_SERIAL` |
 | `RELAY ON` / `OFF` | **beta1 only** — force the RS485 bus-connect relay, bench-only override, bypasses the 5V-stable gate |
@@ -136,6 +136,7 @@ after it) plus its own debug-only `RS485ECHO` transport test mode.
 | `CMD_SET_LED_BRIGHTNESS` | `0x3A` | **v0.02b+** — `[level 1-255]` | `CMD_ACK` / `CMD_NACK` |
 | `CMD_SET_PEEL_RATE` | `0x3B` | **v0.02b+** — `[hi,lo]` 0.1 ms/mm (5–5000, 0 = off) | `CMD_ACK` / `CMD_NACK` |
 | `CMD_GET_PEEL_RATE` | `0x3C` | **v0.02b+** — — | `CMD_PEEL_RATE_INFO` (`0xA6`): `[hi,lo]`, `0xFFFF` = unset |
+| `CMD_FEED_BACK` | `0x3D` | **v0.02b+** — — | `CMD_ACK` / `CMD_NACK [errCode]` — back by the pitch, peel reversed first if a rate is set |
 
 `CMD_ACK` = `0x82`, `CMD_NACK` = `0x83`. Error codes (in `CMD_NACK`
 payloads and `CMD_STATUS_INFO`'s `lastMoveErr`): `0x00` none, `0x01` fault,

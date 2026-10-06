@@ -54,25 +54,40 @@ measured). **Not yet run on a real board.**
      the distance-proportional one. The v0.02 open question ("a 2 mm and
      an 8 mm feed need different amounts of peel") is what this answers.
 
-3. **Buttons: SW1+SW2 together switch control mode** (chosen over
-   "SW2 peels only before the first feed", which would be a hidden,
-   stateful rule):
-   - **Feed mode (blue, default):** SW1 short = feed one tooth (with the
-     coupled peel), SW1 hold >= 700 ms = fast feed one turn. SW2 does
-     nothing yet (its intended final role, UNFEED, is still a TODO).
-   - **Peel mode (green):** SW1 held = peel forward, SW2 held = peel in
-     reverse, each only while held (10 s cap), for tensioning by feel.
-   - Press both within an 80 ms window (`CHORD_WINDOW_MS`) to toggle. The
-     window means every single press now waits up to 80 ms before acting,
-     so a chord never fires as a feed first. After a chord both buttons
-     must be released before anything else registers.
-   - Peel mode returns to feed mode after 30 s without a button press
+3. **Buttons: three modes, SW1 = forward and SW2 = reverse in each.**
+   SW1+SW2 pressed together step to the next mode (feed only, peel only,
+   feed+peel, then back to feed only). The order matches how a reel is set
+   up: load the tape by hand, then tension the cover tape, then test real
+   advances.
+   - **Feed only (blue, boot default).** SW1 short = feed one tooth, SW1
+     hold >= 700 ms = fast feed one turn (tape loading), SW2 = back one
+     tooth. The peel motor is never touched.
+   - **Peel only (orange).** SW1 held = peel forward, SW2 held = peel in
+     reverse, each only while held (10 s cap), for tensioning by feel. Falls
+     back to feed-only after 2 min without a press
      (`PEEL_MODE_IDLE_TIMEOUT_MS`), so a forgotten mode can't turn the next
-     SW1 press into a peel.
-   - Green was unused in the release status colors (yellow booting, blue
-     ready, red error, purple moving, white identify).
+     SW1 press into an unexpected peel.
+   - **Feed+peel (green).** SW1 = feed one tooth, then peel by the
+     `PeelRate`; SW2 = peel in reverse first, then back one tooth. Without
+     a rate saved it behaves like feed-only. One tooth per press even if
+     held. Fast feed is feed-only on purpose: it is a loading move.
+   - `MODE` / `MODE FEED|PEEL|BOTH` on the debug port shows or sets it;
+     `STATUS` prints `mode=`.
+   - Colors are `ledReady()`; orange (255,90,0) and green are the new ones.
+     Orange sits near yellow (booting) and red (error): both have a very
+     different green channel, but pick another if it reads badly on your
+     LED. In feed+peel mode, where steady green is the mode color, the
+     bus-activity flash is blue instead.
+   - Press both within an 80 ms window (`CHORD_WINDOW_MS`) to step. The
+     window means every single press waits up to 80 ms before acting, so a
+     chord never fires as a feed first. After a chord both buttons must be
+     released before anything else registers.
    - The held-through-boot guard is kept: a button down at power-up isn't
      armed until released once.
+   - New bus command `CMD_FEED_BACK` (`0x3D`): back up by the configured
+     pitch, peel reversed first when a rate is set. The mirror of
+     `CMD_FEED_NEXT`; it lets the PC tools test the backward case, which
+     the buttons only reach in feed+peel mode.
 
 4. **Green flash on bus traffic.** Whenever a frame addressed to this
    feeder arrives (unicast, or broadcast once it has an address), plus its
@@ -103,8 +118,9 @@ Everything open in `v0.02/project.md` and `v0.01a/project.md` still is, plus:
 - Reverse peel before a backward seat is applied on the boot-time seat as
   well. If the cover tape isn't threaded yet it just spins the peel motor
   for under one tooth's worth.
-- SW2 has no function in feed mode. UNFEED (feed backwards, peel reversed
-  first via the same coupling) would be the natural fit.
+- SW2 back-one-tooth in feed-only mode moves the sprocket backwards with no
+  peel slack, by design (the peel isn't involved in that mode). Backing out
+  a tape that is already under peeled cover tape is a feed+peel job.
 - Brightness default (40) is a guess for "visible but cheap"; adjust on the
   bench.
 - Not built with PlatformIO here: confirm flash/RAM on the real toolchain.
