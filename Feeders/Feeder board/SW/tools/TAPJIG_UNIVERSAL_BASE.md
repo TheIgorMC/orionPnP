@@ -246,6 +246,62 @@ lines + a ground per few signals is already about 150-180 contacts, so plan for
 If three keyed edges plus alignment are too awkward mechanically, that is the
 point to prefer the backplane-with-cards option.
 
+## Connector decisions so far
+
+Connector: Samtec **HSEC8-130-01-L-DV-A-K-TR** (as read from the part number:
+0.8 mm pitch, 2 x 30 = 60 contacts, edge-card socket). Rated **240 VAC /
+339 VDC**, so 24 V needs no extra spacing care. Verify the per-contact current
+rating and mating-cycle rating on the datasheet. The fixture card needs
+1.57 mm board thickness and hard-gold edge fingers.
+
+Mating order does not matter: every rail is off until the fixture is seated
+and its ID validated, so only ground is connected at insertion. This relies on
+the base's rail switches defaulting to **off** at power-up and whenever no valid
+fixture is present.
+
+Total DUT current is expected to stay under about 2 A, so a few ground
+contacts and about two contacts per rail are enough; extra contacts are for
+redundancy and lower contact resistance only.
+
+### CN1 draft: power and analog (pin map as drawn, not final)
+
+Top row (even pins): `2-8` +24 V, `10-16` +12 V, `18-24` +5 V, `26-28` +3V3,
+`30, 32` no-connect, `34-60` analog inputs A1-A14.
+Bottom row (odd pins): `1, 3, 7, 9, 11, 15, 17, 23, 25` GNDO (power ground),
+`5` +24V_K, `13` +12V_K, `21` +5V_K, `27` +3V_K (Kelvin sense, one per rail),
+`29` GND_K (shared Kelvin return), `19, 31` unused, `33-59` AGND (one beside
+each analog input).
+
+Open points on CN1:
+
+- GNDO and the per-rail contact counts are more than the current needs; trim to
+  about 3-4 GND and 2 per rail and reuse the freed pins (interlock, Vio
+  references).
+- The four Kelvin sense lines need ADC channels of their own on top of A1-A14
+  (about 18 channels, so a fourth ADS1115), and 24 V / 12 V need fixed dividers
+  on the base because the ADS1115 inputs cannot exceed its supply. Divider
+  returns go to GND_K.
+- GNDO, GND_K and AGND are separate nets on the connector and join at **one**
+  star point on the base; on the fixture they meet only at the DUT ground pogo
+  (GND_K at the point nearest the load).
+- Mark unused pins explicitly as no-connect in the schematic (a few wire ends
+  currently show no junction).
+
+### Fixture ID rail (dedicated 3V3, EEPROM only)
+
+A separate 3V3 powers only the fixture-ID EEPROM, so the fixture can be
+validated before anything else is powered. Rules:
+
+- gated and current-limited (tens of mA; series resistor plus PTC), and kept
+  away from the other rails' contacts;
+- the ID bus pull-ups are supplied **from this gated rail**, not from the base's
+  always-on 3V3, otherwise the EEPROM is phantom-powered through its ESD diodes
+  and an absent or half-seated fixture can look present;
+- on CN3 as four adjacent contacts: ID 3V3, SDA, SCL, ground;
+- "valid" means: EEPROM answers, CRC passes, fixture type and revision are
+  allowed by the selected product (optionally a hash or signature of the
+  profile). Only then are the interlock and the rails enabled.
+
 ## Open questions
 
 - RP2350 (arbitrary pin blocks, external CAN) or STM32G4 (hardware blocks, CAN
