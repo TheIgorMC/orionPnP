@@ -1,4 +1,4 @@
-# Feeder Firmware Quick Reference (alpha01 / alpha02 / alpha03 / beta1 / v0.01a)
+# Feeder Firmware Quick Reference (alpha01 / alpha02 / alpha03 / beta1 / v0.01a / v0.02 / v0.02b)
 
 Debug port: **Serial1**, 9600 baud, newline-terminated, via the ISP header
 (D11/D12 — shares that header with ISP flashing, mutually exclusive at any
@@ -7,21 +7,30 @@ whichever firmware is actually flashed.
 
 Full design rationale for any of this: `alpha01/project.md` /
 `alpha02/project.md` / `alpha03/project.md` / `beta1/project.md` /
-`v0.01a/project.md`. Full RS485 wire protocol spec (opcodes, error
-codes): **`PROTOCOL.md`**.
+`v0.01a/project.md` / `v0.02/project.md` / `v0.02b/project.md`. Full RS485
+wire protocol spec (opcodes, error codes): **`PROTOCOL.md`**. PC-side
+GUI/CLI for the bus: **`tools/README.md`**.
 
 `v0.01a` is the first MAJOR-version release (forked from `beta1`) — same
 command set as `beta1` throughout this doc, except `SELFTEST` and the
 SW1/SW2-held-at-boot relay button-test mode aren't run automatically on
 every boot anymore (both still work on demand, see their entries below).
 v0.01a also adds `PEEL <ms>` (peel motor alone, negative = reverse),
-makes SW2 run the peel motor for as long as it's held, SW1 held >=700ms
+makes SW2 run the peel motor for as long as it's held (replaced by the
+three button modes in v0.02b, see the *buttons* row), SW1 held >=700ms
 = fast feed (one full sprocket turn, also `FASTFEED`), `SNAP` = seat on
 the nearest tooth approaching backwards, prints short
 `ok`/`ERR: ...` replies instead of long sentences, and has `TRACE` off by
 default (one `move N ok <angle>` / `move N ERR <why>` line per move).
 Status RGB on v0.01a: yellow = booting, blue = ready, red = error (no
 magnet / driver fault), purple = motor moving, white = IDENTIFY.
+
+`v0.02` adds a per-feeder saved peel time (`PEELCAL`, `PEELRUN`,
+`CMD_SET_PEEL_TIME`/`CMD_GET_PEEL_TIME`, `CMD_PEEL` with only a direction),
+`JOG`/`CMD_JOG`, `I2CSCAN` and `SETSERIAL` for a plain AT24C02, and error
+codes `ERR_I2C`/`ERR_LOCKED`. `v0.02b` adds the saved peel rate that ties
+peel to feed distance, `CMD_FEED_BACK`, adjustable status-LED brightness,
+three button modes and a green flash on bus traffic (see the rows below).
 
 ## Bring-up / status
 
@@ -32,6 +41,14 @@ magnet / driver fault), purple = motor moving, white = IDENTIFY.
 | `SIMADDR <n>` | force bus address `n` (1–247) locally, bench-only, skips `CMD_DISCOVER`/`CMD_ASSIGN_ADDR` |
 | `LED ON` / `LED OFF` | standard external LED, plain on/off. alpha01/02: D13/PB5 (shares ISP header's SCK line). alpha03+: A3/PC3 (own pin) |
 | `IDENTIFY [n]` | **alpha02+** — blink status LED white `n` times (default 3), mirrors `CMD_IDENTIFY` |
+| `PEEL <ms>` | **v0.01a+** — run the peel motor alone for `ms` (1–5000, negative = reverse). Stops on a driver fault |
+| `PEELCAL [<ms>]` | **v0.02+** — show / save this feeder's fixed peel time (10–5000 ms, internal EEPROM, survives component changes and `RESETCFG`), mirrors `CMD_SET_PEEL_TIME` |
+| `PEELRUN [REV]` | **v0.02+** — run the saved peel time (`ERR` if none saved) |
+| `FASTFEED` | **v0.01a+** — one full sprocket turn forward (160 mm), same as holding SW1 in feed-only mode |
+| `SNAP` | **v0.01a+** — seat on the nearest tooth, always approaching backwards (with a peel rate set, peels in reverse first) |
+| `JOG <mm>` | **v0.02+** — relative sprocket move, ±0.1–160 mm (same as `MOVEMM`), mirrors `CMD_JOG`. Never touches the peel motor |
+| `I2CSCAN` | **v0.02+** — list the 7-bit addresses that answer on the I2C bus (`0x36` AS5600, `0x50`–`0x57` EEPROM, `0x58`+ AT24CS02 serial page) |
+| `SETSERIAL <32 hex>` | **v0.02+** — program a 16-byte serial into a plain AT24C02 (read back and verified); refused if a factory serial exists. Mirrors `CMD_SET_SERIAL` |
 | `LEDBRIGHT [<1-255>]` | **v0.02b+** — show / set status RGB brightness (saved, default 40) |
 | `PEELRATE [<ms/mm>]` | **v0.02b+** — show / set peel per mm of feed (saved; `0` = off). With a rate set, `FEED`/SW1 peel forward after the sprocket moves, `SNAP` peels in reverse before it moves back. Not used by `FASTFEED`/`MOVEMM`/`GOMM`/`JOG` |
 | *buttons* | **v0.02b+** — SW1 = forward, SW2 = reverse, in three modes; SW1+SW2 together step to the next. **Feed only** (blue, boot default): SW1 = feed a tooth (hold = fast feed), SW2 = back a tooth, no peel. **Peel only** (orange): SW1 / SW2 held = peel fwd / rev. **Feed+peel** (green): SW1 = feed then peel, SW2 = peel reverse then back a tooth (needs a peel rate). Peel-only drops back to feed-only after 2 min idle. `MODE [FEED\|PEEL\|BOTH]` shows / sets it from the debug port |
@@ -133,6 +150,11 @@ after it) plus its own debug-only `RS485ECHO` transport test mode.
 | `CMD_IDENTIFY` | `0x32` | **alpha02+** — `[blinkCount]` (0⇒3) | `CMD_ACK` (after blinking) |
 | `CMD_GET_SERIAL` | `0x33` | **alpha03+** — — | `CMD_SERIAL_INFO` (`0xA3`): 16 bytes, or `CMD_NACK` if the AT24CS02 didn't respond |
 | `CMD_PEEL` | `0x34` | **v0.01a+** — `[dir(0=fwd,1=rev), duration×10ms]` | `CMD_ACK` (after the run) / `CMD_NACK` |
+| `CMD_SET_PEEL_TIME` | `0x35` | **v0.02+** — `[msHi,msLo]` (10–5000) | `CMD_ACK` (echo) / `CMD_NACK` |
+| `CMD_GET_PEEL_TIME` | `0x36` | **v0.02+** — — | `CMD_PEEL_TIME_INFO` (`0xA4`): `[msHi,msLo]`, `0xFFFF` = unset |
+| `CMD_JOG` | `0x37` | **v0.02+** — `[hi,lo]` signed 0.1 mm units (±1600) | `CMD_ACK [angleRawHi,angleRawLo]` / `CMD_NACK [errCode]` |
+| `CMD_I2C_SCAN` | `0x38` | **v0.02+** — — | `CMD_I2C_SCAN_INFO` (`0xA5`): responding addresses |
+| `CMD_SET_SERIAL` | `0x39` | **v0.02+** — 16 serial bytes | `CMD_ACK` / `CMD_NACK [ERR_LOCKED\|ERR_I2C]` |
 | `CMD_SET_LED_BRIGHTNESS` | `0x3A` | **v0.02b+** — `[level 1-255]` | `CMD_ACK` / `CMD_NACK` |
 | `CMD_SET_PEEL_RATE` | `0x3B` | **v0.02b+** — `[hi,lo]` 0.1 ms/mm (5–5000, 0 = off) | `CMD_ACK` / `CMD_NACK` |
 | `CMD_GET_PEEL_RATE` | `0x3C` | **v0.02b+** — — | `CMD_PEEL_RATE_INFO` (`0xA6`): `[hi,lo]`, `0xFFFF` = unset |
@@ -141,7 +163,8 @@ after it) plus its own debug-only `RS485ECHO` transport test mode.
 `CMD_ACK` = `0x82`, `CMD_NACK` = `0x83`. Error codes (in `CMD_NACK`
 payloads and `CMD_STATUS_INFO`'s `lastMoveErr`): `0x00` none, `0x01` fault,
 `0x02` magnet lost, `0x03` stall, `0x04` timeout, `0x05` bad param, `0x06`
-not ready (e.g. feed requested before calibrated). Full detail:
+not ready (e.g. feed requested before calibrated), `0x07` I2C/EEPROM
+problem (v0.02+), `0x08` locked (v0.02+). Full detail:
 `PROTOCOL.md`.
 
 ---

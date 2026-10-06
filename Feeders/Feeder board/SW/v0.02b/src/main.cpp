@@ -56,7 +56,7 @@
   engages through - is untouched.
 
   Also v0.01a: status RGB = yellow booting / blue ready / red error /
-  purple moving; peel motor runnable on its own (SW2 hold, PEEL, CMD_PEEL)
+  purple moving; peel motor runnable on its own (peel-only button mode, PEEL, CMD_PEEL)
   for tape tensioning; compact debug output (TRACE off by default); no
   String class in the debug parser. See project.md items 5-9.
 
@@ -198,9 +198,10 @@ const float STALL_MOVE_THRESHOLD_DEG = 0.15f;
 
 // SW2/motor B open-loop jog (see file header - motor B has no encoder on
 // this design, so there's no closed-loop equivalent to fall back to).
-// Peel motor is also run on its own to tension the cover tape: SW2 runs it
-// for as long as the button is held (PEEL_HOLD_MAX_MS safety cap), PEEL
-// debug command / CMD_PEEL run it for a set time.
+// Peel motor is also run on its own to tension the cover tape: in peel-only
+// button mode SW1/SW2 run it forward/reverse for as long as the button is
+// held (PEEL_HOLD_MAX_MS safety cap), PEEL debug command / CMD_PEEL run it
+// for a set time.
 const int   PEEL_DUTY = FAST_DUTY;
 const unsigned long PEEL_HOLD_MAX_MS = 10000;
 const unsigned long PEEL_CMD_MAX_MS = 5000;
