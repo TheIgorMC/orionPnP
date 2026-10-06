@@ -194,6 +194,9 @@ HDMI monitor (USB-powered, USB touch), everything from one 5 V supply
 (about 5 V / 4-5 A; the jig needs a 5->12 V boost for the DUT's VIN). Not
 started; decisions so far:
 
+- [ ] Hardware direction for a universal base (resource budget, fixture
+      connector, fixture/jig profiles, safety): see
+      `TAPJIG_UNIVERSAL_BASE.md`.
 - [ ] **Separate kiosk app** for production (keep `rs485_gui.py` as the
       engineering tool): fullscreen 1024x600, touch-sized buttons, product
       selector, big PASS/FAIL banner, stage list, run/stop. No packet
