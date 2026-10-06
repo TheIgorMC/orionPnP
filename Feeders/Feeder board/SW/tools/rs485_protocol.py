@@ -148,7 +148,7 @@ def decode_payload(cmd: int, p: bytes) -> str:
             out = f"nonce=0x{nonce:04X} componentId={comp_s} tapeWidth={width}"
             if len(p) >= 8:  # v0.02b+: slot identity
                 px = (p[6] << 8) | p[7]
-                out += f" lastAddr={'none' if p[5] == 0 else p[5]} posX={'UNSET' if px == 0xFFFF else px}"
+                out += f" lastAddr={'none' if p[5] == 0 else p[5]} posX={'UNSET' if px == 0xFFFF else f'{px} ({px / 10:.1f}mm)'}"
             return out
         if cmd == 0xA0 and len(p) >= 5:  # CMD_COMPONENT_INFO
             comp = (p[0] << 8) | p[1]
@@ -184,7 +184,7 @@ def decode_payload(cmd: int, p: bytes) -> str:
             return "peelTime=UNCALIBRATED" if ms == 0xFFFF else f"peelTime={ms}ms"
         if cmd == 0xA7 and len(p) >= 3:  # CMD_POSITION_INFO (v0.02b+)
             px = (p[0] << 8) | p[1]
-            return f"posX={'UNSET' if px == 0xFFFF else px} lastAddr={'none' if p[2] == 0 else p[2]}"
+            return f"posX={'UNSET' if px == 0xFFFF else f'{px} ({px / 10:.1f}mm)'} lastAddr={'none' if p[2] == 0 else p[2]}"
         if cmd == 0xA6 and len(p) >= 2:  # CMD_PEEL_RATE_INFO (v0.02b+)
             t = (p[0] << 8) | p[1]
             return "peelRate=UNSET (no feed/peel coupling)" if t == 0xFFFF else f"peelRate={t / 10:.1f}ms/mm"

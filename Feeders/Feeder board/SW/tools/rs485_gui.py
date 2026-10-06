@@ -1104,7 +1104,7 @@ class App:
         ttk.Button(addr, text="Restore addresses", command=self._do_restore).grid(row=0, column=7, **pad)
         self.scan_tree = ttk.Treeview(addr, columns=("nonce", "component", "width", "last", "pos"), show="headings", height=3, selectmode="browse")
         for col, text, w in (("nonce", "Nonce", 90), ("component", "Component", 90), ("width", "Tape width", 80),
-                             ("last", "Last addr", 70), ("pos", "Pos X", 70)):
+                             ("last", "Last addr", 70), ("pos", "Pos X", 120)):
             self.scan_tree.heading(col, text=text)
             self.scan_tree.column(col, width=w, anchor="center")
         self.scan_tree.grid(row=1, column=0, columnspan=5, sticky="w", **pad)
@@ -1112,6 +1112,7 @@ class App:
         ttk.Entry(addr, textvariable=self.posx_var, width=8).grid(row=2, column=2, sticky="w", **pad)
         ttk.Button(addr, text="Save on feeder", command=self._do_set_position).grid(row=2, column=3, columnspan=2, **pad)
         ttk.Button(addr, text="Read", command=lambda: self._quick(CMD_GET_POSITION)).grid(row=2, column=5, **pad)
+        ttk.Label(addr, foreground=COLOR_DIM, text="raw (0.1 mm units) or e.g. 123.4mm").grid(row=2, column=6, columnspan=2, sticky="w", **pad)
         self.scan_tree.bind("<<TreeviewSelect>>", self._on_scan_select)
         ttk.Label(addr, foreground=COLOR_DIM, wraplength=330, justify="left", text=(
             "Scan lists every unassigned feeder. Pick one and Assign, or use Scan + assign when exactly one answers. "
@@ -1484,7 +1485,8 @@ class App:
         last, pos = "-", "-"
         if len(p) >= 8:  # v0.02b+: slot identity
             last = "-" if p[5] == 0 else p[5]
-            pos = "-" if ((p[6] << 8) | p[7]) == 0xFFFF else ((p[6] << 8) | p[7])
+            raw = (p[6] << 8) | p[7]
+            pos = "-" if raw == 0xFFFF else f"{raw} ({raw / 10:.1f} mm)"
         self.scan_tree.insert("", "end", iid=key, values=(
             key, "not set" if comp == 0xFFFF else comp, "not set" if p[4] == 0xFF else f"{p[4]} mm", last, pos))
         self.nonce_var.set(key)
@@ -1600,11 +1602,13 @@ class App:
         if addr is None:
             return
         try:
-            x = int(self.posx_var.get(), 0)
+            text = self.posx_var.get().strip().lower().replace(" ", "")
+            # raw units (1 unit = 0.1 mm), or millimetres with an "mm" suffix: 123.4mm
+            x = int(round(float(text[:-2]) * 10)) if text.endswith("mm") else int(text, 0)
             if not 0 <= x <= 0xFFFF:
                 raise ValueError
         except ValueError:
-            self._log(f"Bad position: '{self.posx_var.get()}' (0-65535)", "err")
+            self._log(f"Bad position: '{self.posx_var.get()}' (0-65535 raw, or e.g. 123.4mm)", "err")
             return
 
         def run():

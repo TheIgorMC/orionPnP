@@ -2505,7 +2505,7 @@ void printHelp() {
     "Move : STEP <teeth> | T<n> | A<deg> | MOVEMM <mm> | FEED | FASTFEED | SNAP | GOTOZERO | GOMM <mm> | STOP\n"
     "Peel : PEEL <ms>  (negative = reverse, max 5000) | PEELCAL [<ms>] | PEELRUN [REV] | PEELRATE [<ms/mm>] (0=off; feed peels after, seat un-peels first)\n"
     "Tape : ZEROHERE | PITCH <mm> | COMPONENT <id> | FEEDCFG <raw> <halfTeeth> | RESETCFG\n"
-    "Setup: ZERO | INVERTA ON|OFF | INVERTB ON|OFF | SETWIDTH <mm> | SIMADDR <n> | SETPOS <x> | POS\n"
+    "Setup: ZERO | INVERTA ON|OFF | INVERTB ON|OFF | SETWIDTH <mm> | SIMADDR <n> | SETPOS <raw|123.4MM> | POS\n"
     "Power: IMON | 5VSTATUS | I5V | RELAY ON|OFF | CALI <mA> | CALV <V> | CALSTATUS | CALRESET\n"
     "Info : STATUS | SERIAL | SETSERIAL <32 hex> | I2CSCAN | SELFTEST | IDENTIFY [n] | LED ON|OFF | TRACE ON|OFF | LEDBRIGHT [<1-255>] | HELP"));
 }
@@ -2676,14 +2676,16 @@ void handleDebugLine(const char *line) {
   }
   if (CMD_IS("POS")) {
     Serial1.print(F("pos="));
-    if (slotInfo.posX == POS_X_UNSET) Serial1.print('-'); else Serial1.print(slotInfo.posX);
+    if (slotInfo.posX == POS_X_UNSET) Serial1.print('-');
+    else { Serial1.print(slotInfo.posX); Serial1.print(F(" (")); Serial1.print(slotInfo.posX / 10.0f, 1); Serial1.print(F("mm)")); }
     Serial1.print(F(" lastAddr="));
     if (slotInfo.lastAddr == 0) Serial1.println('-'); else Serial1.println(slotInfo.lastAddr);
     return;
   }
   if ((arg = CMD_ARG("SETPOS "))) {
-    const long v = parseInt(arg);
-    if (v < 0 || v > 0xFFFF) { Serial1.println(F("ERR: SETPOS <0-65535> (65535 = clear)")); return; }
+    // raw units (0.1 mm each), or "123.4MM" for millimetres (debug helper; the line is upper-cased)
+    const long v = strchr(arg, 'M') ? lround(parseNum(arg) * 10.0f) : parseInt(arg);
+    if (v < 0 || v > 0xFFFF) { Serial1.println(F("ERR: SETPOS <0-65535 raw> or <0-6553.4>MM (65535 = clear)")); return; }
     slotInfo.posX = (uint16_t)v;
     saveSlotInfo();
     printOk();
