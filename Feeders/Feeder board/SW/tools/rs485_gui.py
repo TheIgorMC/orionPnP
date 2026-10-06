@@ -85,6 +85,7 @@ CMD_GET_HW_INFO = 0x29
 CMD_HW_INFO = 0xA1
 CMD_SET_HW_INFO = 0x2A
 CMD_GET_STATUS = 0x30
+CMD_SET_EXT_LED = 0x27
 CMD_STATUS_INFO = 0xA2
 CMD_STOP = 0x31
 CMD_IDENTIFY = 0x32
@@ -476,23 +477,29 @@ class App:
         ttk.Button(btns, text="Identify", width=8, command=lambda: self._quick(CMD_IDENTIFY, bytes([0]))).grid(row=0, column=1, **pad)
         ttk.Button(btns, text="Refresh", width=8, command=lambda: self._quick(CMD_GET_STATUS)).grid(row=0, column=2, **pad)
 
+        led = ttk.Frame(card)
+        led.grid(row=2, column=0, sticky="e", padx=4)
+        ttk.Label(led, text="2nd LED (fiber):").grid(row=0, column=0, padx=2)
+        ttk.Button(led, text="On", width=5, command=lambda: self._quick(CMD_SET_EXT_LED, bytes([1]))).grid(row=0, column=1, padx=2)
+        ttk.Button(led, text="Off", width=5, command=lambda: self._quick(CMD_SET_EXT_LED, bytes([0]))).grid(row=0, column=2, padx=2)
+
         self.stop_btn = tk.Button(card, text="STOP  (Esc)", bg="#c01c28", fg="white", activebackground="#8f1420",
                                   activeforeground="white", font=self.big_font, relief="raised", bd=3,
                                   command=self._stop_all)
-        self.stop_btn.grid(row=2, column=0, sticky="ew", padx=8, pady=6, ipady=6)
+        self.stop_btn.grid(row=3, column=0, sticky="ew", padx=8, pady=6, ipady=6)
 
         self.busy_var = tk.StringVar()
-        ttk.Label(card, textvariable=self.busy_var, foreground=COLOR_WARN, wraplength=260).grid(row=3, column=0, sticky="w", **pad)
+        ttk.Label(card, textvariable=self.busy_var, foreground=COLOR_WARN, wraplength=260).grid(row=4, column=0, sticky="w", **pad)
 
         live = ttk.LabelFrame(card, text="Live")
-        live.grid(row=4, column=0, sticky="ew", **pad)
+        live.grid(row=5, column=0, sticky="ew", **pad)
         for r, (key, title) in enumerate((("link", "Link"), ("magnet", "Magnet"), ("driver", "Motor driver"),
                                           ("relay", "RS485 relay"), ("angle", "Wheel angle"),
                                           ("current", "12V current"), ("lasterr", "Last move"))):
             self._indicator_row(live, r, key, title)
 
         saved = ttk.LabelFrame(card, text="Saved on this feeder")
-        saved.grid(row=5, column=0, sticky="ew", **pad)
+        saved.grid(row=6, column=0, sticky="ew", **pad)
         self.cfg_vars = {}
         for r, (key, title) in enumerate((("component", "Component id"), ("zero", "Tape zero"), ("pitch", "Feed pitch"),
                                           ("width", "Tape width"), ("peeltime", "Peel time"), ("peelrate", "Peel rate"))):
