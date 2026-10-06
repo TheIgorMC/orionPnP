@@ -5,6 +5,20 @@
 #include <Adafruit_NeoPixel.h>
 #include "pins_config.h"
 
+#ifdef TAPJIG_TEST
+// TAP-Jig TEST build (env atmega328pb_isp_test, -DTAPJIG_TEST): the same
+// firmware plus a few commands only the test-and-program jig needs, and
+// with the autonomous behaviour that would fight a test switched off (no
+// boot homing, no button actions - buttons are only reported, the status RGB
+// can be held by the jig). The production build (default env) contains none
+// of this. See ../tools/TAPJIG.md.
+#include <avr/wdt.h>
+uint8_t mcusrAtBoot __attribute__((section(".noinit")));
+void captureMcusr(void) __attribute__((naked, used, section(".init3")));
+void captureMcusr(void) { mcusrAtBoot = MCUSR; MCUSR = 0; wdt_disable(); }
+bool testRgbHold = false;
+#endif
+
 /*
   v0.02b - forked from v0.02. Adds:
   - Status RGB brightness is runtime-adjustable and persisted
@@ -732,6 +746,16 @@ uint8_t feedOnePitch(unsigned long timeoutMs);
 uint8_t moveFeedCoupled(float mm, unsigned long timeoutMs);
 float mmForHalfTeeth(uint8_t halfTeeth);
 void applyLedBrightness();
+#ifdef TAPJIG_TEST
+uint16_t readIMonRaw();
+uint16_t readAdcInternalRef(uint8_t pin);
+bool magnetDetected();
+void setStatusLedColor(uint8_t r, uint8_t g, uint8_t b);
+int softStartDuty(int targetDuty, unsigned long sinceStartMs);
+void driveMotorA(int duty, bool forward);
+void driveMotorB(int duty, bool forward);
+extern bool relayEngaged;
+#endif
 void flashRxLed();
 void setExtLed(bool on);
 void identifyBlink(uint8_t count);
@@ -875,6 +899,14 @@ constexpr uint8_t CMD_JOG = 0x37;           // payload: [hi,lo] signed 0.1mm uni
 constexpr uint8_t CMD_I2C_SCAN = 0x38;      // -> CMD_I2C_SCAN_INFO - v0.02
 constexpr uint8_t CMD_I2C_SCAN_INFO = 0xA5; // payload: responding 7-bit addresses (up to 16)
 constexpr uint8_t CMD_SET_SERIAL = 0x39;    // payload: 16 serial bytes -> CMD_ACK / CMD_NACK [ERR_LOCKED|ERR_I2C] - v0.02, plain AT24C02 only
+// TAP-Jig test-build commands (handled only when compiled with TAPJIG_TEST; the
+// production build ignores them like any unknown command).
+constexpr uint8_t CMD_T_INPUTS = 0x40;       // -> CMD_T_INPUTS_INFO [flags,imonHi,imonLo,v5Hi,v5Lo]; flags: b0 SW1 down, b1 SW2 down, b2 DRV nFAULT low, b3 relay coil on, b4 magnet detected
+constexpr uint8_t CMD_T_INPUTS_INFO = 0xB0;
+constexpr uint8_t CMD_T_UPTIME = 0x41;       // -> CMD_T_UPTIME_INFO [ms x4 big-endian, MCUSR at boot]
+constexpr uint8_t CMD_T_UPTIME_INFO = 0xB1;
+constexpr uint8_t CMD_T_RGB = 0x42;          // [r,g,b] hold the status RGB (all 0 = release) -> CMD_ACK
+constexpr uint8_t CMD_T_MOTOR = 0x43;        // [motor(0=A,1=B), dir(0/1), ms x10 (1-255)] open loop, full duty -> CMD_ACK [faultSeen] / CMD_NACK
 constexpr uint8_t CMD_FEED_BACK = 0x3D;     // no payload: back by the configured pitch, peel reversed first if a PeelRate is set -> CMD_ACK / CMD_NACK [errCode] - v0.02b
 constexpr uint8_t CMD_SET_LED_BRIGHTNESS = 0x3A; // payload: [level 1-255] -> CMD_ACK (echo) / CMD_NACK ERR_BAD_PARAM - v0.02b, status RGB, persisted
 constexpr uint8_t CMD_SET_PEEL_RATE = 0x3B; // payload: [hi,lo] 0.1 ms-of-peel per mm of feed (5-5000, 0 = clear/off) -> CMD_ACK (echo) / CMD_NACK ERR_BAD_PARAM - v0.02b, persisted
@@ -1067,6 +1099,48 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
       sendFrame(CMD_PEEL_TIME_INFO, reply, sizeof(reply));
       break;
     }
+#ifdef TAPJIG_TEST
+    case CMD_T_INPUTS: {
+      const uint16_t imon = readIMonRaw();
+      const uint16_t v5 = readAdcInternalRef(PIN_5V_READY);
+      const int active = BUTTONS_ACTIVE_LOW ? LOW : HIGH;
+      const uint8_t flags = (digitalRead(PIN_SW1) == active ? 1 : 0) | (digitalRead(PIN_SW2) == active ? 2 : 0)
+                          | (digitalRead(PIN_nFAULT) == LOW ? 4 : 0) | (relayEngaged ? 8 : 0) | (magnetDetected() ? 16 : 0);
+      const uint8_t reply[5] = { flags, (uint8_t)(imon >> 8), (uint8_t)(imon & 0xFF), (uint8_t)(v5 >> 8), (uint8_t)(v5 & 0xFF) };
+      sendFrame(CMD_T_INPUTS_INFO, reply, sizeof(reply));
+      break;
+    }
+    case CMD_T_UPTIME: {
+      const unsigned long ms = millis();
+      const uint8_t reply[5] = { (uint8_t)(ms >> 24), (uint8_t)(ms >> 16), (uint8_t)(ms >> 8), (uint8_t)ms, mcusrAtBoot };
+      sendFrame(CMD_T_UPTIME_INFO, reply, sizeof(reply));
+      break;
+    }
+    case CMD_T_RGB: {
+      if (len < 3) { const uint8_t e = ERR_BAD_PARAM; sendFrame(CMD_NACK, &e, 1); break; }
+      testRgbHold = (payload[0] | payload[1] | payload[2]) != 0;
+      if (testRgbHold) setStatusLedColor(payload[0], payload[1], payload[2]);
+      sendFrame(CMD_ACK, nullptr, 0);
+      break;
+    }
+    case CMD_T_MOTOR: {
+      if (len < 3 || payload[0] > 1 || payload[2] == 0) { const uint8_t e = ERR_BAD_PARAM; sendFrame(CMD_NACK, &e, 1); break; }
+      const bool fwd = payload[1] == 0;
+      const unsigned long ms = (unsigned long)payload[2] * 10;
+      uint8_t faultSeen = 0;
+      const unsigned long start = millis();
+      while (millis() - start < ms) {
+        if (digitalRead(PIN_nFAULT) == LOW) { faultSeen = 1; break; }
+        const int duty = softStartDuty(FAST_DUTY, millis() - start);
+        if (payload[0] == 0) driveMotorA(duty, fwd); else driveMotorB(duty, fwd);
+        delay(1);
+      }
+      brakeMotorA();
+      brakeMotorB();
+      sendFrame(CMD_ACK, &faultSeen, 1);
+      break;
+    }
+#endif
     case CMD_FEED_BACK: {
       if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) { const uint8_t e = ERR_NOT_READY; lastMoveError = e; sendFrame(CMD_NACK, &e, 1); break; }
       const uint8_t err = moveFeedCoupled(-mmForHalfTeeth(cfg.feedHalfTeeth), MOVE_TIMEOUT_MS);
@@ -1630,6 +1704,9 @@ constexpr unsigned long RX_FLASH_MS = 80;
 unsigned long rxFlashUntilMs = 0;
 
 void flashRxLed() {
+#ifdef TAPJIG_TEST
+  if (testRgbHold) return;
+#endif
   rxFlashUntilMs = millis() + RX_FLASH_MS;
   if (buttonMode == MODE_BOTH) setStatusLedColor(0, 0, 255); else setStatusLedColor(0, 255, 0);
 }
@@ -2658,7 +2735,11 @@ void setup() {
   // magnet-placement stability check both have to pass first, and neither
   // should block the debug port or RS485 bus from responding meanwhile.
 
+  #ifdef TAPJIG_TEST
+  Serial1.println(F("v0.02b TEST BUILD (TAP-Jig) ready"));
+#else
   Serial1.println(F("v0.02b ready - HELP for commands"));
+#endif
   printStatus();
   if (!magnetDetected()) Serial1.println(F("WARN: no magnet - homing deferred"));
 }
@@ -2670,6 +2751,10 @@ void loop() {
   // Status RGB: blue = ready, red = error (no magnet / driver fault).
   // Purple (moving) is set inside the move/peel functions themselves and
   // gets repainted here on the next iteration once they return.
+#ifdef TAPJIG_TEST
+  if (testRgbHold) { /* the jig is driving the RGB */ }
+  else
+#endif
   if ((long)(rxFlashUntilMs - now) > 0) { /* bus-activity flash still showing */ }
   else if (magnet && digitalRead(PIN_nFAULT) != LOW) ledReady();
   else ledError();
@@ -2702,9 +2787,11 @@ void loop() {
   }
   digitalWrite(PIN_FAULT_LED, LOW);
 
+#ifndef TAPJIG_TEST // test build: no autonomous motor moves, no button actions (inputs are read over the bus)
   checkHoming(); // no-op once homingDone; see its own comment for the boot-delay/stagger + magnet-stability gate
 
   handleButtons(lastSw1EdgeMs);
+#endif
   motorsSleepIfIdle();
 
   rs485Poll();

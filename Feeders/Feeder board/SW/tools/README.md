@@ -98,6 +98,18 @@ Tabs:
   payload hex box can be edited by hand to send something malformed.
   Broadcast-only commands (Discover/Assign) always go to addr 0x00.
 
+## Production (TAP-Jig)
+
+The **Production** tab runs the test-and-program routine for the jig
+(pre-power checks, power-up, flash test firmware, switches, RESET, fault
+line, LEDs, AS5600, serial number, motors, RS-485, EEPROM, flash production
+firmware, final confirm) and logs a pass/fail record per unit. It talks to
+the jig's 32u4 over its own USB port and runs avrdude for the ISP stages.
+`tapjig_run.py` runs the same routine headless. Everything about it, the
+jig line protocol, the test firmware and what is still open, is in
+**`TAPJIG.md`**. The jig firmware does not exist yet; `sim_jig.py` stands in
+for it.
+
 ## Trying it without hardware
 
 `sim_feeder.py` (Linux/macOS only - it uses a pseudo-terminal) behaves

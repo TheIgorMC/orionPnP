@@ -104,6 +104,14 @@ measured). **Not yet run on a real board.**
    remembered settings, always-visible STOP) and `sim_feeder.py` lets it be
    tried without hardware. See `../tools/README.md`.
 
+6. **TAP-Jig test build.** `pio run -e atmega328pb_isp_test` builds the same
+   firmware with `-DTAPJIG_TEST`: no boot homing, no button actions (buttons
+   are only reported), the status RGB can be held, and four extra commands
+   (`CMD_T_INPUTS/UPTIME/RGB/MOTOR`, `0x40`-`0x43`) for the test-and-program
+   jig. Same fuses as the production env. The production build contains none
+   of it and ignores those opcodes (the jig's final stage relies on that).
+   Both builds were only compile-checked. See `../tools/TAPJIG.md`.
+
 ## Open questions
 
 Everything open in `v0.02/project.md` and `v0.01a/project.md` still is, plus:

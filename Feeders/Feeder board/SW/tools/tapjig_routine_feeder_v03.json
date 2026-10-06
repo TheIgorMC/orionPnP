@@ -1,0 +1,295 @@
+{
+  "test_id": "feeder_v03_test",
+  "board_rev": "V3 (TPS26601 eFuse + RS-485 relay)",
+  "fw_versions": { "test": "v0.02b TAPJIG_TEST", "production": "v0.02b" },
+  "bus_addr": 1,
+  "_note": "ALL numeric limits below are PLACEHOLDERS taken from the spec's nominal values (FB 1.22 V, 5 V rail, ...) or guessed; calibrate them on a known-good unit before trusting a result. Checks marked advisory are logged but never fail a stage. See TAPJIG.md.",
+  "params": {
+    "servo_park": 0,
+    "servo_angles": [30, 90, 150, 210]
+  },
+  "isp": {
+    "programmer": "usbasp",
+    "part": "m328pb",
+    "settle_s": 1.0,
+    "fuses": { "lfuse": "0xE2", "hfuse": "0xD7", "efuse": "0xFD" },
+    "_fuses_note": "Internal 8 MHz, no CKDIV8, BOD 2.7 V, EESAVE on, no bootloader (what `pio run -t fuses` burns for this board). VERIFY with `pio run -e atmega328pb_isp -t fuses -v` before the first production run."
+  },
+  "stages": [
+    {
+      "id": 0, "name": "Pre-power checks",
+      "steps": [
+        { "do": "jig.psu_off" },
+        { "do": "jig.cold", "rail": "VIN", "save": "cold_vin" },
+        { "check": "between(cold_vin.ohms, 8000, 60000)", "label": "VIN to GND is not a short or open (~20k expected)" },
+        { "do": "jig.cold", "rail": "V5", "save": "cold_v5" },
+        { "check": "between(cold_v5.ohms, 3000, 20000)", "label": "5V to GND high-Z (~4-10k expected)" },
+        { "do": "jig.cold", "rail": "VMOT", "save": "cold_vmot" },
+        { "check": "between(cold_vmot.ohms, 3000, 20000)", "label": "VMOT to GND high-Z (same node as 5V on early revisions)" },
+        { "do": "jig.cont", "name": "VIN_PRE_POST", "save": "fuse" },
+        { "check": "fuse.ohms < 2.0", "label": "VIN pre-fuse to post-fuse continuity" },
+        { "do": "jig.cont", "name": "GNDP", "save": "gndp" },
+        { "check": "gndp.ohms < 1.0", "label": "GNDP bridged to GND (RN1 links intact)" },
+        { "do": "jig.cont", "name": "MODE_RTN", "save": "mode" },
+        { "check": "mode.ohms > 100000", "label": "eFuse MODE pin not bridged to RTN" }
+      ]
+    },
+    {
+      "id": 1, "name": "Power-up, tight current limit",
+      "steps": [
+        { "do": "jig.psu_on", "limit_ma": 300 },
+        { "wait_ms": 800 },
+        { "do": "jig.state", "save": "st" },
+        { "check": "st.psu == 1 and st.latched == 0", "label": "PSU on, no current-limit trip latched" },
+        { "do": "jig.adc", "node": "FB", "save": "fb" },
+        { "check": "between(fb.mv, 1180, 1260)", "label": "Buck FB about 1.22 V" },
+        { "do": "jig.adc", "node": "V5", "save": "v5" },
+        { "check": "between(v5.mv, 4900, 5100)", "label": "5V rail in band" },
+        { "do": "jig.adc", "node": "VIN", "save": "vin" },
+        { "check": "between(vin.mv, 11000, 13000)", "label": "VIN post-fuse about 12 V" },
+        { "do": "jig.adc", "node": "VINPROT", "save": "vinprot" },
+        { "check": "abs(vinprot.mv - vin.mv) < 600", "label": "Post-TVS node tracks VIN (protection chain healthy)" },
+        { "do": "jig.dig", "name": "V5RDY", "save": "v5rdy" },
+        { "check": "v5rdy.v == 1", "label": "5V supervisor power-good" },
+        { "do": "jig.dig", "name": "FLT", "save": "flt" },
+        { "check": "flt.v == 1", "label": "eFuse FLT# not asserted" },
+        { "do": "jig.adc", "node": "IIN", "save": "iin" },
+        { "check": "between(iin.ma, 0, 150)", "label": "Idle input current plausible" }
+      ]
+    },
+    {
+      "id": 2, "name": "Flash test firmware",
+      "steps": [
+        { "do": "isp.program", "which": "test", "fuses": true, "erase": true, "save": "isp_test" },
+        { "check": "isp_test.ok", "label": "ISP erase, fuses, write and verify OK" },
+        { "wait_ms": 2500 },
+        { "do": "dut.discover_assign", "save": "link" },
+        { "check": "link.ok", "label": "Test firmware answers and takes a bus address" },
+        { "do": "dut.ping", "save": "ping0" },
+        { "check": "ping0.ok", "label": "Ping round-trips" }
+      ]
+    },
+    {
+      "id": 3, "name": "SW1 / SW2",
+      "steps": [
+        { "do": "dut.inputs", "save": "sw_idle" },
+        { "do": "jig.sw", "name": "SW1", "pressed": true },
+        { "wait_ms": 80 },
+        { "do": "dut.inputs", "save": "sw1_dn" },
+        { "do": "jig.sw", "name": "SW1", "pressed": false },
+        { "do": "jig.sw", "name": "SW2", "pressed": true },
+        { "wait_ms": 80 },
+        { "do": "dut.inputs", "save": "sw2_dn" },
+        { "do": "jig.sw", "name": "SW2", "pressed": false },
+        { "wait_ms": 80 },
+        { "do": "dut.inputs", "save": "sw_end" },
+        { "check": "sw_idle.ok and sw_idle.sw1 == 0 and sw_idle.sw2 == 0", "label": "Both released at rest" },
+        { "check": "sw1_dn.sw1 == 1 and sw1_dn.sw2 == 0", "label": "SW1 detected, SW2 not" },
+        { "check": "sw2_dn.sw2 == 1 and sw2_dn.sw1 == 0", "label": "SW2 detected, SW1 not" },
+        { "check": "sw_end.sw1 == 0 and sw_end.sw2 == 0", "label": "Both released again" }
+      ],
+      "cleanup": [
+        { "do": "jig.sw", "name": "SW1", "pressed": false },
+        { "do": "jig.sw", "name": "SW2", "pressed": false }
+      ]
+    },
+    {
+      "id": 4, "name": "RESET",
+      "steps": [
+        { "wait_ms": 1000 },
+        { "do": "jig.reset_pulse", "ms": 50 },
+        { "wait_ms": 2500 },
+        { "do": "dut.discover_assign", "save": "relink" },
+        { "do": "dut.uptime", "save": "up" },
+        { "check": "relink.ok", "label": "DUT re-announces itself after RESET" },
+        { "check": "up.ok and up.ext_reset", "label": "MCUSR shows an external reset" },
+        { "check": "up.ms < 6000", "label": "Uptime restarted from zero" }
+      ]
+    },
+    {
+      "id": 5, "name": "Fault line (real motor stall)",
+      "steps": [
+        { "do": "jig.stall", "ch": 1, "on": true },
+        { "do": "dut.motor", "motor": 0, "direction": 0, "ms": 600, "save": "stall" },
+        { "do": "jig.ldr", "which": "RGB", "save": "ldr_fault" },
+        { "do": "jig.stall", "ch": 1, "on": false },
+        { "wait_ms": 400 },
+        { "do": "dut.inputs", "save": "after_stall" },
+        { "check": "stall.ok and stall.fault", "label": "DRV8833 FAULT trips on a real stall" },
+        { "check": "after_stall.ok and after_stall.fault == 0", "label": "FAULT clears once the stall is released" },
+        { "check": "ldr_fault.raw >= 0", "advisory": true, "label": "RGB LDR while faulted (limit not calibrated; recorded only)" }
+      ],
+      "cleanup": [
+        { "do": "jig.stall", "ch": 1, "on": false }
+      ]
+    },
+    {
+      "id": 6, "name": "Fiber LED",
+      "steps": [
+        { "do": "dut.ext_led", "on": false },
+        { "wait_ms": 150 },
+        { "do": "jig.ldr", "which": "FIBER", "save": "fiber_off" },
+        { "do": "dut.ext_led", "on": true },
+        { "wait_ms": 150 },
+        { "do": "jig.ldr", "which": "FIBER", "save": "fiber_on" },
+        { "do": "dut.ext_led", "on": false },
+        { "wait_ms": 150 },
+        { "do": "jig.ldr", "which": "FIBER", "save": "fiber_off2" },
+        { "check": "fiber_on.raw - fiber_off.raw > 150", "label": "On is clearly brighter than off" },
+        { "check": "abs(fiber_off2.raw - fiber_off.raw) < 60", "label": "Back to the dark level when switched off" }
+      ],
+      "cleanup": [
+        { "do": "dut.ext_led", "on": false }
+      ]
+    },
+    {
+      "id": 7, "name": "RGB status LED",
+      "steps": [
+        { "do": "dut.rgb", "r": 1, "g": 1, "b": 1 },
+        { "wait_ms": 150 },
+        { "do": "jig.ldr", "which": "RGB", "save": "rgb_dark" },
+        { "do": "dut.rgb", "r": 255, "g": 0, "b": 0 },
+        { "wait_ms": 150 },
+        { "do": "jig.ldr", "which": "RGB", "save": "rgb_r" },
+        { "do": "dut.rgb", "r": 0, "g": 255, "b": 0 },
+        { "wait_ms": 150 },
+        { "do": "jig.ldr", "which": "RGB", "save": "rgb_g" },
+        { "do": "dut.rgb", "r": 0, "g": 0, "b": 255 },
+        { "wait_ms": 150 },
+        { "do": "jig.ldr", "which": "RGB", "save": "rgb_b" },
+        { "check": "rgb_r.raw - rgb_dark.raw > 60", "label": "Red lights up" },
+        { "check": "rgb_g.raw - rgb_dark.raw > 60", "label": "Green lights up" },
+        { "check": "rgb_b.raw - rgb_dark.raw > 60", "label": "Blue lights up" },
+        { "check": "abs(rgb_r.raw - rgb_g.raw) > 20 and abs(rgb_g.raw - rgb_b.raw) > 20 and abs(rgb_r.raw - rgb_b.raw) > 20", "label": "R, G and B give distinct levels (LDR response must be calibrated)" }
+      ],
+      "cleanup": [
+        { "do": "dut.rgb", "r": 0, "g": 0, "b": 0 }
+      ]
+    },
+    {
+      "id": 8, "name": "AS5600 (no magnet)",
+      "steps": [
+        { "do": "jig.servo", "deg": "=p.servo_park" },
+        { "wait_ms": 600 },
+        { "do": "dut.i2c_scan", "save": "scan" },
+        { "do": "dut.status", "save": "flat" },
+        { "check": "scan.ok and scan.has_as5600", "label": "AS5600 answers on I2C (0x36)" },
+        { "check": "scan.has_eeprom", "label": "EEPROM answers on I2C (0x50)" },
+        { "check": "flat.ok and flat.magnet == 'NONE'", "label": "No magnet reported with the arm parked" }
+      ]
+    },
+    {
+      "id": 9, "name": "AS5600 (magnet, servo sweep)",
+      "steps": [
+        { "do": "jig.servo", "deg": "=p.servo_angles[0]" },
+        { "wait_ms": 600 },
+        { "do": "dut.status", "save": "a0" },
+        { "do": "jig.servo", "deg": "=p.servo_angles[1]" },
+        { "wait_ms": 600 },
+        { "do": "dut.status", "save": "a1" },
+        { "do": "jig.servo", "deg": "=p.servo_angles[2]" },
+        { "wait_ms": 600 },
+        { "do": "dut.status", "save": "a2" },
+        { "do": "jig.servo", "deg": "=p.servo_angles[3]" },
+        { "wait_ms": 600 },
+        { "do": "dut.status", "save": "a3" },
+        { "check": "a0.magnet == 'OK' and a1.magnet == 'OK' and a2.magnet == 'OK' and a3.magnet == 'OK'", "label": "Magnet detected, field strength OK at every position" },
+        { "check": "within(angdiff(a1.angle_deg, a0.angle_deg), 60, 15) or within(angdiff(a1.angle_deg, a0.angle_deg), 300, 15)", "label": "Angle follows the servo: step 1 (60 deg)" },
+        { "check": "within(angdiff(a2.angle_deg, a1.angle_deg), 60, 15) or within(angdiff(a2.angle_deg, a1.angle_deg), 300, 15)", "label": "Angle follows the servo: step 2 (60 deg)" },
+        { "check": "within(angdiff(a3.angle_deg, a2.angle_deg), 60, 15) or within(angdiff(a3.angle_deg, a2.angle_deg), 300, 15)", "label": "Angle follows the servo: step 3 (60 deg)" }
+      ],
+      "cleanup": [
+        { "do": "jig.servo", "deg": "=p.servo_park" }
+      ]
+    },
+    {
+      "id": 10, "name": "AT24CS02 - gather serial number",
+      "steps": [
+        { "do": "dut.serial", "save": "sn" },
+        { "check": "sn.ok and sn.valid", "label": "Factory serial read, not all zero" }
+      ]
+    },
+    {
+      "id": 11, "name": "Motors + encoders",
+      "steps": [
+        { "do": "jig.enc_arm", "ch": 1, "window_ms": 1800 },
+        { "do": "dut.motor", "motor": 0, "direction": 0, "ms": 1000, "save": "mA" },
+        { "do": "jig.enc_read", "ch": 1, "save": "encA" },
+        { "do": "jig.dig", "name": "FAULT", "save": "faultA" },
+        { "do": "jig.enc_arm", "ch": 2, "window_ms": 1800 },
+        { "do": "dut.motor", "motor": 1, "direction": 0, "ms": 1000, "save": "mB" },
+        { "do": "jig.enc_read", "ch": 2, "save": "encB" },
+        { "do": "jig.dig", "name": "FAULT", "save": "faultB" },
+        { "check": "mA.ok and not mA.fault and faultA.v == 1", "label": "Channel A drives without a DRV fault" },
+        { "check": "between(encA.rev_ms, 100, 2000)", "label": "Motor 1 revolution time in the ballpark (calibrate)" },
+        { "check": "mB.ok and not mB.fault and faultB.v == 1", "label": "Channel B drives without a DRV fault" },
+        { "check": "between(encB.rev_ms, 100, 2000)", "label": "Motor 2 revolution time in the ballpark (calibrate)" }
+      ]
+    },
+    {
+      "id": 12, "name": "RS-485 logic side",
+      "steps": [
+        { "do": "dut.ping", "save": "ping12" },
+        { "check": "ping12.ok", "label": "DUT answers" },
+        { "check": "ping12.de == 1", "label": "RE/DE pogo asserted while the DUT transmitted" }
+      ]
+    },
+    {
+      "id": 13, "name": "RS-485 bus side",
+      "steps": [
+        { "do": "dut.ping", "save": "ping13" },
+        { "do": "dut.status", "save": "st13" },
+        { "do": "dut.inputs", "save": "in13" },
+        { "do": "jig.dig", "name": "EN485", "save": "en485" },
+        { "do": "jig.cont", "name": "R485_POST", "save": "r485" },
+        { "do": "jig.adc", "node": "IMON", "save": "imon" },
+        { "do": "jig.adc", "node": "IIN", "save": "iin13" },
+        { "check": "ping13.ok and st13.ok", "label": "Real protocol frames round-trip" },
+        { "check": "in13.ok and in13.relay == 1 and en485.v == 1", "label": "DUT commands the RS-485 relay (EN_485_COIL high)" },
+        { "check": "r485.ohms < 5.0", "label": "Post-relay A/B continuous (K1 closed)" },
+        { "check": "abs(imon.mv * 200.0 / 4070.0 - iin13.ma) < 30", "label": "eFuse IMON agrees with the jig's own current reading" }
+      ]
+    },
+    {
+      "id": 14, "name": "Write EEPROM",
+      "steps": [
+        { "do": "dut.write_width", "mm": "=opt.tape_width_mm", "save": "ww" },
+        { "do": "dut.hw_info", "save": "hw" },
+        { "do": "dut.write_serial", "if": "not sn.valid", "save": "wsn" },
+        { "check": "ww.ok", "label": "Tape width write accepted" },
+        { "check": "hw.ok and hw.width == opt.tape_width_mm", "label": "Tape width reads back" },
+        { "if": "not sn.valid", "check": "wsn.ok", "label": "Serial written (plain AT24C02 only)" }
+      ]
+    },
+    {
+      "id": 15, "name": "Flash production firmware",
+      "steps": [
+        { "do": "isp.program", "which": "production", "fuses": false, "erase": true, "save": "isp_prod" },
+        { "check": "isp_prod.ok", "label": "ISP erase, write and verify OK (same fuse bits as the test firmware)" }
+      ]
+    },
+    {
+      "id": 16, "name": "Final confirm",
+      "steps": [
+        { "wait_ms": 2500 },
+        { "do": "dut.discover_assign", "save": "link2" },
+        { "do": "dut.ping", "save": "ping16" },
+        { "do": "dut.serial", "save": "sn2" },
+        { "do": "dut.hw_info", "save": "hw2" },
+        { "do": "dut.uptime", "save": "tfw" },
+        { "check": "link2.ok and ping16.ok", "label": "Production firmware answers" },
+        { "check": "sn2.hex == (sn.hex if sn.valid else wsn.serial)", "label": "Serial number matches stage 10 / 14" },
+        { "check": "hw2.ok and hw2.width == opt.tape_width_mm", "label": "Tape width matches stage 14" },
+        { "check": "not tfw.ok", "label": "Test-only commands are gone (production build is running)" }
+      ]
+    },
+    {
+      "id": 17, "name": "Release",
+      "steps": [
+        { "do": "jig.psu_off" },
+        { "do": "jig.state", "save": "end" },
+        { "check": "end.psu == 0", "label": "Board powered down, safe to eject" }
+      ]
+    }
+  ]
+}

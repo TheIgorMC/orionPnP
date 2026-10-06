@@ -39,6 +39,28 @@ class SimFeeder:
         self.angle = 1234
         self.magnet_ok = True
         self.fault = False
+        # TAP-Jig hooks (used by sim_jig.py; harmless otherwise)
+        self.test_fw = False        # test build: answers the CMD_T_* commands
+        self.factory_serial = None  # 16 bytes = an AT24CS02; None = plain AT24C02 (GET_SERIAL NACKs)
+        self.has_as5600 = True
+        self.boot = time.monotonic()
+        self.mcusr = 0x01
+        self.ext_led = 0
+        self.rgb_hold = None
+        self.sw = [0, 0]
+        self.stalled = False
+        self.imon_raw = 104
+        self.relay = True
+        self.on_motor = None        # callback(motor, ms) when a motor was driven
+
+    def reboot(self, mcusr):
+        """Power-on / RESET: the address is forgotten, uptime restarts."""
+        self.addr = 0
+        self.nonce = random.randrange(1, 0xFFFF)
+        self.boot = time.monotonic()
+        self.mcusr = mcusr
+        self.rgb_hold = None
+        self.fault = False
 
     def _angle_after(self, mm):
         self.angle = (self.angle + int(round(mm * 4096 / 160.0))) % 4096
@@ -130,9 +152,34 @@ class SimFeeder:
             time.sleep(0.5)
             ack()
         elif c == 0x33:
-            nack(ERR_I2C)
+            if self.factory_serial:
+                send(self.addr, 0xA3, self.factory_serial)
+            else:
+                nack(ERR_I2C)
         elif c == 0x38:
-            send(self.addr, 0xA5, bytes([0x36, 0x50]))
+            found = ([0x36] if self.has_as5600 else []) + [0x50] + ([0x58] if self.factory_serial else [])
+            send(self.addr, 0xA5, bytes(found))
+        elif c == 0x27 and p:
+            self.ext_led = 1 if p[0] else 0
+            ack(p)
+        elif self.test_fw and c == 0x40:
+            flags = (self.sw[0] | (self.sw[1] << 1) | (int(self.fault) << 2) | (int(self.relay) << 3)
+                     | (int(self.magnet_ok) << 4))
+            send(self.addr, 0xB0, bytes([flags, self.imon_raw >> 8, self.imon_raw & 255, 0x03, 0x30]))
+        elif self.test_fw and c == 0x41:
+            ms = int((time.monotonic() - self.boot) * 1000)
+            send(self.addr, 0xB1, ms.to_bytes(4, "big") + bytes([self.mcusr]))
+        elif self.test_fw and c == 0x42 and len(p) >= 3:
+            self.rgb_hold = tuple(p[:3]) if any(p[:3]) else None
+            ack()
+        elif self.test_fw and c == 0x43 and len(p) >= 3:
+            ms = p[2] * 10
+            fault_seen = 1 if (self.stalled and p[0] == 0) else 0
+            if self.on_motor and not fault_seen:
+                self.on_motor(p[0], ms)
+            time.sleep((0.12 if fault_seen else ms / 1000.0))
+            self.fault = bool(fault_seen)
+            send(self.addr, 0x82, bytes([fault_seen]))
         elif c == 0x3A and p and p[0]:
             self.led = p[0]
             ack(p)

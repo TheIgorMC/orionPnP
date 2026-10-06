@@ -106,6 +106,10 @@ see **Error codes** below; otherwise empty).
 | `CMD_SET_PEEL_RATE` | `0x3B` | **v0.02b+** — `[hi,lo]` in 0.1 ms-of-peel per mm of sprocket travel (5–5000; `0` = off) | `CMD_ACK` (echo) / `CMD_NACK [ERR_BAD_PARAM]` | couples peel to feed. A forward feed (`CMD_FEED_NEXT`, SW1) moves the sprocket, **then** peels forward for `rate × mm`. A backward seat (`SNAP`, post-homing) peels in **reverse first**, by the same `rate × mm`, then moves. Not applied to `CMD_JOG`, fast feed, `MOVEMM`/`GOMM`. `CMD_FEED_NEXT`'s reply now arrives after the peel too (peel is capped at 5 s). Per feeder, internal EEPROM, independent of the component |
 | `CMD_GET_PEEL_RATE` | `0x3C` | **v0.02b+** — — | `CMD_PEEL_RATE_INFO` (`0xA6`): `[hi,lo]` | `0xFFFF` = unset (no coupling) |
 | `CMD_FEED_BACK` | `0x3D` | **v0.02b+** — — | `CMD_ACK` / `CMD_NACK [errCode]` | the mirror of `CMD_FEED_NEXT`: back up by the configured pitch; with a peel rate set, peel in **reverse first**, then move. `ERR_NOT_READY` if no pitch is set. Blocks for the move plus the peel |
+| `CMD_T_INPUTS` | `0x40` | **test build only** — — | `CMD_T_INPUTS_INFO` (`0xB0`): `[flags,imonHi,imonLo,v5Hi,v5Lo]` | flags: b0 SW1 down, b1 SW2 down, b2 DRV nFAULT low, b3 relay coil on, b4 magnet detected. TAP-Jig only (`-DTAPJIG_TEST`); the production build ignores it |
+| `CMD_T_UPTIME` | `0x41` | **test build only** — — | `0xB1`: `[ms x4 big-endian, MCUSR at boot]` | bit 1 of MCUSR = external reset |
+| `CMD_T_RGB` | `0x42` | **test build only** — `[r,g,b]` (all 0 = release) | `CMD_ACK` | holds the status RGB |
+| `CMD_T_MOTOR` | `0x43` | **test build only** — `[motor 0=A/1=B, dir, ms/10]` | `CMD_ACK [faultSeen]` | open-loop full-duty drive with soft start; stops on a DRV fault |
 
 ## Error codes
 

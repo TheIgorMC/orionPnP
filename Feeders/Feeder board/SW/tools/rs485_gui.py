@@ -48,6 +48,7 @@ except ImportError:
     print("This tool needs pyserial: pip install pyserial", file=sys.stderr)
     sys.exit(1)
 
+import tapjig_engine as tapjig
 from rs485_protocol import (
     DEFAULT_BAUD,
     CMD_NAMES,
@@ -291,6 +292,11 @@ class App:
             "rts": self.rts_var.get(), "addr": self.addr_var.get(), "new_addr": self.new_addr_var.get(),
             "pitch": self.pitch_var.get(), "width": self.width_var.get(), "peel_ms": self.peel_ms_var.get(),
             "peel_dir": self.peel_dir_var.get(), "rate": self.rate_var.get(), "autopoll": self.autopoll_var.get(),
+            "prod_port": self.prod_port_var.get(), "prod_routine": self.routine_var.get(),
+            "prod_test_hex": self.test_hex_var.get(), "prod_prod_hex": self.prod_hex_var.get(),
+            "prod_avrdude": self.avrdude_var.get(), "prod_logdir": self.logdir_var.get(),
+            "prod_width": self.prod_width_var.get(), "prod_operator": self.operator_var.get(),
+            "prod_dry": self.dry_isp_var.get(), "prod_stop_on_fail": self.stop_on_fail_var.get(),
         }
         try:
             with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
@@ -310,6 +316,16 @@ class App:
                          ("peel_dir", self.peel_dir_var), ("rate", self.rate_var)):
             if isinstance(s.get(key), str) and s[key]:
                 var.set(s[key])
+        for key, var in (("prod_port", self.prod_port_var), ("prod_routine", self.routine_var),
+                         ("prod_test_hex", self.test_hex_var), ("prod_prod_hex", self.prod_hex_var),
+                         ("prod_avrdude", self.avrdude_var), ("prod_logdir", self.logdir_var),
+                         ("prod_width", self.prod_width_var), ("prod_operator", self.operator_var)):
+            if isinstance(s.get(key), str) and s[key]:
+                var.set(s[key])
+        for key, var in (("prod_dry", self.dry_isp_var), ("prod_stop_on_fail", self.stop_on_fail_var)):
+            if isinstance(s.get(key), bool):
+                var.set(s[key])
+        self._prod_load_routine(quiet=True)
         if isinstance(s.get("rts"), bool):
             self.rts_var.set(s["rts"])
         if isinstance(s.get("autopoll"), bool):
@@ -333,8 +349,8 @@ class App:
     def _build_widgets(self):
         pad = {"padx": 4, "pady": 4}
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=3)
-        self.root.rowconfigure(2, weight=2)
+        self.root.rowconfigure(1, weight=5)
+        self.root.rowconfigure(2, weight=1)
 
         # --- Connection ---
         conn = ttk.LabelFrame(self.root, text="Connection")
@@ -398,6 +414,7 @@ class App:
                 ("peelcal", "Peel calibration", self._build_peelcal_tab),
                 ("jog", "Jog & zero", self._build_jog_tab),
                 ("setup", "Setup", self._build_setup_tab),
+                ("production", "Production", self._build_production_tab),
                 ("builder", "Packet builder", self._build_builder_tab)):
             frame = builder(self.tabs)
             self.tab_frames[key] = frame
@@ -409,7 +426,7 @@ class App:
         log_frame.rowconfigure(0, weight=1)
         log_frame.columnconfigure(0, weight=1)
 
-        self.log = scrolledtext.ScrolledText(log_frame, height=8, state="disabled", wrap="word")
+        self.log = scrolledtext.ScrolledText(log_frame, height=6, state="disabled", wrap="word")
         self.log.grid(row=0, column=0, columnspan=5, sticky="nsew", **pad)
         self.log.tag_configure("tx", foreground="#1a5fb4")
         self.log.tag_configure("rx", foreground="#26a269")
@@ -747,6 +764,316 @@ class App:
         except ValueError:
             return default
 
+    # --- Production tab (TAP-Jig) ---
+    PROD_ICONS = {"pending": ("○", COLOR_OFF), "running": ("▶", "#1a5fb4"), "pass": ("✔", COLOR_OK),
+                  "fail": ("✖", COLOR_BAD), "error": ("✖", COLOR_BAD), "aborted": ("■", COLOR_WARN)}
+
+    def _build_production_tab(self, parent):
+        pad = {"padx": 4, "pady": 3}
+        here = os.path.dirname(os.path.abspath(__file__))
+        tab = ttk.Frame(parent)
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(3, weight=1)
+        self.jig = None
+        self.prod_thread = None
+        self.prod_abort = threading.Event()
+        self.prod_routine = None
+        self.prod_results = {}
+        self.prod_counts = {"pass": 0, "fail": 0}
+        self.prod_port_var = tk.StringVar()
+        self.prod_baud_var = tk.StringVar(value="115200")
+        self.prod_status_var = tk.StringVar(value="Jig not connected")
+        self.routine_var = tk.StringVar(value=os.path.join(here, "tapjig_routine_feeder_v03.json"))
+        self.test_hex_var = tk.StringVar()
+        self.prod_hex_var = tk.StringVar()
+        self.avrdude_var = tk.StringVar(value="avrdude")
+        self.logdir_var = tk.StringVar(value=os.path.join(here, "production_logs"))
+        self.prod_width_var = tk.StringVar(value="12")
+        self.operator_var = tk.StringVar()
+        self.dry_isp_var = tk.BooleanVar(value=False)
+        self.stop_on_fail_var = tk.BooleanVar(value=True)
+        self.prod_banner_var = tk.StringVar(value="READY")
+        self.prod_count_var = tk.StringVar(value="Session: 0 pass / 0 fail")
+
+        jig = ttk.LabelFrame(tab, text="Jig (ATmega32u4 over USB)")
+        jig.grid(row=0, column=0, sticky="ew", **pad)
+        ttk.Label(jig, text="Port:").grid(row=0, column=0, **pad)
+        self.prod_port_combo = ttk.Combobox(jig, textvariable=self.prod_port_var, width=14)
+        self.prod_port_combo.grid(row=0, column=1, **pad)
+        ttk.Button(jig, text="Refresh", command=self._prod_refresh_ports).grid(row=0, column=2, **pad)
+        ttk.Label(jig, text="Baud:").grid(row=0, column=3, **pad)
+        ttk.Entry(jig, textvariable=self.prod_baud_var, width=8).grid(row=0, column=4, **pad)
+        self.prod_connect_btn = ttk.Button(jig, text="Connect", width=11, command=self._prod_toggle_connect)
+        self.prod_connect_btn.grid(row=0, column=5, **pad)
+        ttk.Label(jig, textvariable=self.prod_status_var).grid(row=0, column=6, sticky="w", **pad)
+        ttk.Button(jig, text="Safe state", command=self._prod_safe).grid(row=0, column=7, **pad)
+        self._prod_refresh_ports()
+
+        unit = ttk.LabelFrame(tab, text="Unit, routine and programmer")
+        unit.grid(row=1, column=0, sticky="ew", **pad)
+        unit.columnconfigure(1, weight=1)
+        rows = (("Routine:", self.routine_var, "json", self._prod_load_routine),
+                ("Test firmware (.hex):", self.test_hex_var, "hex", None),
+                ("Production firmware (.hex):", self.prod_hex_var, "hex", None),
+                ("avrdude:", self.avrdude_var, "exe", None),
+                ("Log folder:", self.logdir_var, "dir", None))
+        for r, (label, var, kind, after) in enumerate(rows):
+            ttk.Label(unit, text=label).grid(row=r, column=0, sticky="e", **pad)
+            ttk.Entry(unit, textvariable=var).grid(row=r, column=1, sticky="ew", **pad)
+            ttk.Button(unit, text="Browse...", command=lambda v=var, k=kind, a=after: self._prod_browse(v, k, a)).grid(row=r, column=2, **pad)
+        ttk.Label(unit, text="Tape width (mm):").grid(row=0, column=3, sticky="e", **pad)
+        ttk.Combobox(unit, textvariable=self.prod_width_var, width=6, state="readonly",
+                     values=["8", "12", "16", "24", "32", "44", "56"]).grid(row=0, column=4, sticky="w", **pad)
+        ttk.Label(unit, text="Operator:").grid(row=1, column=3, sticky="e", **pad)
+        ttk.Entry(unit, textvariable=self.operator_var, width=14).grid(row=1, column=4, sticky="w", **pad)
+        ttk.Checkbutton(unit, text="Dry-run ISP (no programmer; for sim_jig)", variable=self.dry_isp_var).grid(
+            row=2, column=3, columnspan=2, sticky="w", **pad)
+
+        ctl = ttk.Frame(tab)
+        ctl.grid(row=2, column=0, sticky="ew", **pad)
+        ctl.columnconfigure(5, weight=1)
+        self.prod_run_btn = ttk.Button(ctl, text="Run all stages", command=lambda: self._prod_run(None))
+        self.prod_run_btn.grid(row=0, column=0, **pad)
+        self.prod_run_sel_btn = ttk.Button(ctl, text="Run selected stage", command=self._prod_run_selected)
+        self.prod_run_sel_btn.grid(row=0, column=1, **pad)
+        self.prod_stop_btn = ttk.Button(ctl, text="Stop", command=self._prod_stop, state="disabled")
+        self.prod_stop_btn.grid(row=0, column=2, **pad)
+        ttk.Checkbutton(ctl, text="Stop at the first failed stage", variable=self.stop_on_fail_var).grid(row=0, column=3, **pad)
+        ttk.Label(ctl, textvariable=self.prod_count_var, foreground=COLOR_DIM).grid(row=0, column=4, **pad)
+        self.prod_banner = tk.Label(ctl, textvariable=self.prod_banner_var, bg="#9a9996", fg="white", font=self.big_font,
+                                    width=34, anchor="w", padx=10, pady=5)
+        self.prod_banner.grid(row=1, column=0, columnspan=6, sticky="ew", **pad)
+
+        body = ttk.Frame(tab)
+        body.grid(row=3, column=0, sticky="nsew", **pad)
+        body.columnconfigure(0, weight=3)
+        body.columnconfigure(1, weight=2)
+        body.rowconfigure(0, weight=1)
+        self.prod_tree = ttk.Treeview(body, columns=("id", "stage", "status", "detail", "time"), show="headings", height=10,
+                                      selectmode="browse")
+        for col, text, w, anchor in (("id", "#", 34, "center"), ("stage", "Stage", 200, "w"), ("status", "Result", 80, "center"),
+                                     ("detail", "Detail", 260, "w"), ("time", "s", 50, "e")):
+            self.prod_tree.heading(col, text=text)
+            self.prod_tree.column(col, width=w, anchor=anchor, stretch=(col == "detail"))
+        for tag, color in (("pass", COLOR_OK), ("fail", COLOR_BAD), ("error", COLOR_BAD), ("running", "#1a5fb4"),
+                           ("aborted", COLOR_WARN), ("pending", "gray40")):
+            self.prod_tree.tag_configure(tag, foreground=color)
+        self.prod_tree.grid(row=0, column=0, sticky="nsew")
+        sb = ttk.Scrollbar(body, orient="vertical", command=self.prod_tree.yview)
+        self.prod_tree.configure(yscrollcommand=sb.set)
+        sb.grid(row=0, column=0, sticky="nse")
+        self.prod_tree.bind("<<TreeviewSelect>>", self._prod_show_detail)
+        self.prod_detail = scrolledtext.ScrolledText(body, height=10, width=44, wrap="word", state="disabled", font=self.mono_font)
+        self.prod_detail.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        return tab
+
+    def _prod_refresh_ports(self):
+        ports = [p.device for p in serial.tools.list_ports.comports()]
+        self.prod_port_combo["values"] = ports
+        if ports and not self.prod_port_var.get():
+            self.prod_port_var.set(ports[-1] if len(ports) > 1 else ports[0])
+
+    def _prod_browse(self, var, kind, after):
+        if kind == "dir":
+            path = filedialog.askdirectory(initialdir=var.get() or None)
+        else:
+            types = {"json": [("Routine", "*.json")], "hex": [("Intel hex", "*.hex")], "exe": [("Program", "*")]}[kind]
+            path = filedialog.askopenfilename(filetypes=types, initialdir=os.path.dirname(var.get()) or None)
+        if path:
+            var.set(path)
+            if after:
+                after()
+
+    def _prod_load_routine(self, quiet=False):
+        try:
+            self.prod_routine = tapjig.load_routine(self.routine_var.get())
+        except (OSError, ValueError, KeyError, SyntaxError) as exc:
+            self.prod_routine = None
+            self.prod_tree.delete(*self.prod_tree.get_children())
+            if not quiet:
+                messagebox.showerror("Routine", f"Could not load the routine:\n{exc}")
+            return
+        self.prod_tree.delete(*self.prod_tree.get_children())
+        self.prod_results.clear()
+        for st in self.prod_routine["stages"]:
+            self.prod_tree.insert("", "end", iid=str(st["id"]), values=(st["id"], st["name"], "", "", ""), tags=("pending",))
+        self._prod_banner("READY", "#9a9996")
+
+    def _prod_banner(self, text, color):
+        self.prod_banner_var.set(text)
+        self.prod_banner.configure(bg=color)
+
+    def _prod_toggle_connect(self):
+        if self.jig is not None:
+            self.jig.close()
+            self.jig = None
+            self.prod_connect_btn.configure(text="Connect")
+            self.prod_status_var.set("Jig not connected")
+            return
+        try:
+            link = tapjig.JigLink.open(self.prod_port_var.get().strip(), int(self.prod_baud_var.get()))
+            hello = link.cmd("HELLO")
+        except (serial.SerialException, tapjig.JigError, ValueError, OSError) as exc:
+            messagebox.showerror("Jig", f"Could not talk to the jig:\n{exc}")
+            return
+        self.jig = link
+        self.prod_connect_btn.configure(text="Disconnect")
+        self.prod_status_var.set("Connected: " + " ".join(f"{k}={v}" for k, v in hello.items()))
+        self._log(f"Jig connected on {self.prod_port_var.get()}: {dict(hello)}", "info")
+
+    def _prod_safe(self):
+        if self.jig is None or (self.prod_thread and self.prod_thread.is_alive()):
+            return
+        try:
+            self.jig.cmd("SAFE")
+            self._log("Jig put in its safe state (PSU off, switches released).", "info")
+        except tapjig.JigError as exc:
+            self._log(f"Jig SAFE failed: {exc}", "err")
+
+    def _prod_run_selected(self):
+        sel = self.prod_tree.selection()
+        if not sel:
+            messagebox.showinfo("Run selected stage", "Select a stage in the list first.")
+            return
+        self._prod_run({int(sel[0])})
+
+    def _prod_stop(self):
+        self.prod_abort.set()
+        self._prod_banner("STOPPING...", COLOR_WARN)
+
+    def _prod_run(self, stage_ids):
+        if self.prod_thread and self.prod_thread.is_alive():
+            return
+        if self.jig is None:
+            messagebox.showwarning("Production", "Connect to the jig first.")
+            return
+        self._prod_load_routine()
+        if self.prod_routine is None:
+            return
+        dry = self.dry_isp_var.get()
+        needs_isp = any(any(st.get("do") == "isp.program" for st in stage["steps"])
+                        for stage in self.prod_routine["stages"] if stage_ids is None or stage["id"] in stage_ids)
+        if needs_isp and not dry:
+            missing = [n for n, v in (("test", self.test_hex_var), ("production", self.prod_hex_var)) if not os.path.isfile(v.get())]
+            if missing:
+                messagebox.showerror("Production", f"Set the {' and '.join(missing)} firmware .hex file(s) first "
+                                                   f"(or tick Dry-run ISP when using the simulator).")
+                return
+        options = {"tape_width_mm": int(self.prod_width_var.get()), "operator": self.operator_var.get().strip()}
+        isp = tapjig.Isp(self.prod_routine.get("isp", {}), {"test": self.test_hex_var.get(), "production": self.prod_hex_var.get()},
+                         avrdude=self.avrdude_var.get().strip() or "avrdude", dry_run=dry,
+                         log=lambda s: self._log("   " + s, "info"))
+        self.prod_abort.clear()
+        self.prod_results.clear()
+        for st in self.prod_routine["stages"]:
+            if stage_ids is None or st["id"] in stage_ids:
+                self.prod_tree.item(str(st["id"]), values=(st["id"], st["name"], "", "", ""), tags=("pending",))
+        self._prod_set_running(True)
+        self._prod_banner("RUNNING...", "#1a5fb4")
+        self._save_settings()
+        stop_on_fail = self.stop_on_fail_var.get()
+        log_dir = self.logdir_var.get().strip() or "production_logs"
+        link = self.jig
+        routine = self.prod_routine
+
+        def on_stage(sid, status, detail):
+            self._ui(lambda: self._prod_stage_update(sid, status, detail))
+
+        def on_stage_result(sr):
+            self.prod_results[sr["id"]] = sr
+
+        def prompt(msg):
+            box = queue.Queue()
+            self._ui(lambda: box.put(messagebox.askokcancel("Production", msg)))
+            while True:
+                try:
+                    return box.get(timeout=0.2)
+                except queue.Empty:
+                    if self.prod_abort.is_set():
+                        return False
+
+        def run():
+            runner = tapjig.Runner(routine, link, isp, options, on_stage=on_stage, on_log=lambda s: self._log(s, "info"),
+                                   prompt=prompt, abort=self.prod_abort, on_stage_result=on_stage_result)
+            try:
+                result = runner.run(stage_ids, stop_on_fail=stop_on_fail)
+            except Exception as exc:  # the runner reports stage errors itself; this is a last resort
+                self._log(f"Production run crashed: {exc!r}", "err")
+                self._ui(lambda: (self._prod_set_running(False), self._prod_banner(f"ERROR: {exc}", COLOR_BAD)))
+                return
+            path = ""
+            if stage_ids is None:  # a partial run is a debugging aid, not a unit record
+                try:
+                    path = tapjig.write_log(result, log_dir)
+                except OSError as exc:
+                    self._log(f"Could not write the log: {exc}", "err")
+            self._ui(lambda: self._prod_finished(result, path, stage_ids is None))
+
+        self.prod_thread = threading.Thread(target=run, daemon=True)
+        self.prod_thread.start()
+
+    def _prod_set_running(self, running):
+        state = "disabled" if running else "normal"
+        self.prod_run_btn.configure(state=state)
+        self.prod_run_sel_btn.configure(state=state)
+        self.prod_stop_btn.configure(state="normal" if running else "disabled")
+
+    def _prod_stage_update(self, sid, status, detail):
+        iid = str(sid)
+        if not self.prod_tree.exists(iid):
+            return
+        sr = self.prod_results.get(sid)
+        glyph = self.PROD_ICONS.get(status, ("", ""))[0]
+        vals = list(self.prod_tree.item(iid, "values"))
+        vals[2] = {"pending": "", "running": "running"}.get(status, status.upper())
+        vals[3] = detail if status != "running" else ""
+        vals[4] = f"{sr['seconds']:.1f}" if sr else ""
+        self.prod_tree.item(iid, values=vals, tags=(status,))
+        if status == "running":
+            self.prod_tree.see(iid)
+            name = vals[1]
+            self._prod_banner(f"RUNNING  stage {sid}: {name}", "#1a5fb4")
+        if sr and self.prod_tree.selection() == (iid,):
+            self._prod_show_detail()
+
+    def _prod_finished(self, result, path, full_run):
+        self._prod_set_running(False)
+        if result["passed"]:
+            self._prod_banner(f"PASS    SN {result['serial'] or '-'}", COLOR_OK)
+        else:
+            bad = next((s for s in result["stages"] if s["status"] != "pass"), None)
+            what = f"stage {bad['id']}: {bad['name']}" if bad else "stopped"
+            self._prod_banner(f"FAIL    {what}", COLOR_BAD)
+        if full_run:
+            self.prod_counts["pass" if result["passed"] else "fail"] += 1
+            self.prod_count_var.set(f"Session: {self.prod_counts['pass']} pass / {self.prod_counts['fail']} fail")
+        self._log(f"Production run {'PASS' if result['passed'] else 'FAIL'} in {result['seconds']} s"
+                  + (f", log: {path}" if path else " (partial run, not logged)"), "result" if result["passed"] else "err")
+
+    def _prod_show_detail(self, _event=None):
+        sel = self.prod_tree.selection()
+        text = ""
+        if sel:
+            sr = self.prod_results.get(int(sel[0]))
+            if sr is None:
+                text = "No result yet for this stage."
+            else:
+                lines = [f"Stage {sr['id']}: {sr['name']}  [{sr['status'].upper()}, {sr['seconds']} s]"]
+                if sr["error"]:
+                    lines.append(f"ERROR: {sr['error']}")
+                lines.append("")
+                for c in sr["checks"]:
+                    mark = "✔" if c["ok"] else ("~" if c["advisory"] else "✖")
+                    lines.append(f"{mark} {c['label']}")
+                    if not c["ok"] or True:
+                        for k, v in c["values"].items():
+                            lines.append(f"     {k} = {json.dumps(v)}")
+                text = "\n".join(lines)
+        self.prod_detail.configure(state="normal")
+        self.prod_detail.delete("1.0", "end")
+        self.prod_detail.insert("end", text)
+        self.prod_detail.configure(state="disabled")
+
     # --- Setup tab ---
     def _build_setup_tab(self, parent):
         pad = {"padx": 4, "pady": 4}
@@ -872,6 +1199,9 @@ class App:
 
     def _on_close(self):
         self._save_settings()
+        self.prod_abort.set()
+        if self.jig is not None:
+            self.jig.close()
         self._disconnect()
         self.root.destroy()
 
