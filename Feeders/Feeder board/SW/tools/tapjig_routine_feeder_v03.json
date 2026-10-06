@@ -94,8 +94,11 @@
       ]
     },
     {
-      "id": 4, "name": "RESET",
+      "id": 4, "name": "RESET + slot position persistence",
       "steps": [
+        { "do": "dut.set_position", "x": 12345, "save": "setx" },
+        { "do": "dut.get_position", "save": "getx" },
+        { "check": "setx.ok and getx.ok and getx.pos_x == 12345", "label": "Slot position X saves and reads back" },
         { "wait_ms": 1000 },
         { "do": "jig.reset_pulse", "ms": 50 },
         { "wait_ms": 2500 },
@@ -103,7 +106,12 @@
         { "do": "dut.uptime", "save": "up" },
         { "check": "relink.ok", "label": "DUT re-announces itself after RESET" },
         { "check": "up.ok and up.ext_reset", "label": "MCUSR shows an external reset" },
-        { "check": "up.ms < 6000", "label": "Uptime restarted from zero" }
+        { "check": "up.ms < 6000", "label": "Uptime restarted from zero" },
+        { "check": "relink.pos_x == 12345", "label": "Position X survived the reset (internal EEPROM) and is reported in discovery" },
+        { "check": "relink.last_addr == 1", "label": "Last assigned address survived the reset and is reported in discovery" }
+      ],
+      "cleanup": [
+        { "do": "dut.set_position", "x": 65535 }
       ]
     },
     {
@@ -157,12 +165,22 @@
         { "do": "dut.rgb", "r": 0, "g": 0, "b": 255 },
         { "wait_ms": 150 },
         { "do": "jig.ldr", "which": "RGB", "save": "rgb_b" },
+        { "do": "dut.rgb", "r": 255, "g": 0, "b": 0 },
+        { "do": "dut.led_brightness", "level": 255, "save": "br_hi_set" },
+        { "wait_ms": 150 },
+        { "do": "jig.ldr", "which": "RGB", "save": "rgb_hi" },
+        { "do": "dut.led_brightness", "level": 20 },
+        { "wait_ms": 150 },
+        { "do": "jig.ldr", "which": "RGB", "save": "rgb_lo" },
+        { "check": "br_hi_set.ok", "label": "LED brightness command accepted" },
+        { "check": "rgb_hi.raw - rgb_lo.raw > 30", "advisory": true, "label": "Brightness 255 is clearly brighter than 20 (limit not calibrated)" },
         { "check": "rgb_r.raw - rgb_dark.raw > 60", "label": "Red lights up" },
         { "check": "rgb_g.raw - rgb_dark.raw > 60", "label": "Green lights up" },
         { "check": "rgb_b.raw - rgb_dark.raw > 60", "label": "Blue lights up" },
         { "check": "abs(rgb_r.raw - rgb_g.raw) > 20 and abs(rgb_g.raw - rgb_b.raw) > 20 and abs(rgb_r.raw - rgb_b.raw) > 20", "label": "R, G and B give distinct levels (LDR response must be calibrated)" }
       ],
       "cleanup": [
+        { "do": "dut.led_brightness", "level": 40 },
         { "do": "dut.rgb", "r": 0, "g": 0, "b": 0 }
       ]
     },

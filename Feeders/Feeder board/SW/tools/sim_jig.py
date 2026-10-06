@@ -82,7 +82,7 @@ class SimJig:
             return 100
         if self.f.rgb_hold:
             r, g, b = self.f.rgb_hold
-            return int(100 + 0.8 * r + 1.0 * g + 0.5 * b)
+            return int(100 + (0.8 * r + 1.0 * g + 0.5 * b) * (0.5 + 0.5 * self.f.led / 255.0))
         if not self.f.magnet_ok or self.f.fault:
             return int(100 + 0.8 * 255 * 0.16)  # normal status LED: red when no magnet / fault
         return int(100 + 0.5 * 255 * 0.16)

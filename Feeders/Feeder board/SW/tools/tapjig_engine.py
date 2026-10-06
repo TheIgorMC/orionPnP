@@ -40,6 +40,8 @@ CMD_GET_STATUS, CMD_STATUS_INFO = 0x30, 0xA2
 CMD_GET_SERIAL, CMD_SERIAL_INFO = 0x33, 0xA3
 CMD_I2C_SCAN, CMD_I2C_SCAN_INFO = 0x38, 0xA5
 CMD_SET_SERIAL = 0x39
+CMD_SET_LED_BRIGHTNESS = 0x3A
+CMD_SET_POSITION, CMD_GET_POSITION, CMD_POSITION_INFO = 0x3E, 0x3F, 0xA7
 CMD_T_INPUTS, CMD_T_INPUTS_INFO = 0x40, 0xB0
 CMD_T_UPTIME, CMD_T_UPTIME_INFO = 0x41, 0xB1
 CMD_T_RGB = 0x42
@@ -176,7 +178,12 @@ class Dut:
         ok = any(f.addr == self.want_addr and f.cmd == CMD_ACK for f in frames)
         if ok:
             self.addr = self.want_addr
-        return AttrDict(ok=ok, count=1, addr=self.addr if ok else None, nonce=int.from_bytes(nonce, "big"))
+        p = found[0].payload
+        slot = {}
+        if len(p) >= 8:  # v0.02b+: what the feeder remembered from before this boot
+            px = (p[6] << 8) | p[7]
+            slot = {"last_addr": p[5], "pos_x": None if px == 0xFFFF else px}
+        return AttrDict(ok=ok, count=1, addr=self.addr if ok else None, nonce=int.from_bytes(nonce, "big"), **slot)
 
     def forget(self):
         self.addr = None
@@ -458,6 +465,21 @@ class Runner:
                 return AttrDict(ok=False, fault=None)
             return AttrDict(ok=True, fault=bool(f.payload[0]) if f.payload else False)
 
+        def set_position(x):
+            f = dut.request(CMD_SET_POSITION, int(x).to_bytes(2, "big"), timeout_ms=600)
+            return AttrDict(ok=bool(f is not None and f.cmd == CMD_ACK))
+
+        def get_position():
+            f = dut.request(CMD_GET_POSITION, reply_cmds=(CMD_POSITION_INFO,))
+            if f is None or f.cmd != CMD_POSITION_INFO or len(f.payload) < 3:
+                return AttrDict(ok=False, pos_x=None, last_addr=None)
+            px = (f.payload[0] << 8) | f.payload[1]
+            return AttrDict(ok=True, pos_x=None if px == 0xFFFF else px, last_addr=f.payload[2])
+
+        def led_brightness(level):
+            f = dut.request(CMD_SET_LED_BRIGHTNESS, bytes([int(level)]), timeout_ms=600)
+            return AttrDict(ok=bool(f is not None and f.cmd == CMD_ACK))
+
         def hw_info():
             f = dut.request(CMD_GET_HW_INFO, reply_cmds=(CMD_HW_INFO,))
             if f is None or f.cmd != CMD_HW_INFO or not f.payload:
@@ -505,6 +527,7 @@ class Runner:
             "dut.discover_assign": lambda: dut.discover_assign(),
             "dut.ping": ping, "dut.status": status, "dut.i2c_scan": i2c_scan, "dut.serial": serial,
             "dut.inputs": inputs, "dut.uptime": uptime, "dut.rgb": rgb, "dut.ext_led": ext_led, "dut.motor": motor,
+            "dut.set_position": set_position, "dut.get_position": get_position, "dut.led_brightness": led_brightness,
             "dut.hw_info": hw_info, "dut.write_width": write_width, "dut.write_serial": write_serial,
             "isp.program": program, "util.sleep": sleep,
         }
