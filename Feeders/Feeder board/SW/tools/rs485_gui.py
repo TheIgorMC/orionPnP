@@ -563,7 +563,7 @@ class App:
         elif key == "width":
             ttk.Combobox(f, textvariable=self.width_var, width=5, state="readonly",
                          values=["8", "12", "16", "24", "32", "44", "56"]).grid(row=0, column=0, **pad)
-            ttk.Button(f, text="Write", command=self._do_write_width).grid(row=0, column=1, **pad)
+            ttk.Button(f, text="Write (test FW)", command=self._do_write_width).grid(row=0, column=1, **pad)
         elif key == "pitch":
             ttk.Combobox(f, textvariable=self.pitch_var, width=5, values=["2", "4", "8", "12", "16", "20", "24"]).grid(row=0, column=0, **pad)
             ttk.Button(f, text="Set", command=self._do_set_pitch).grid(row=0, column=1, **pad)
@@ -1123,7 +1123,7 @@ class App:
         ttk.Label(misc, text="Tape width (mm):").grid(row=0, column=0, sticky="e", **pad)
         ttk.Combobox(misc, textvariable=self.width_var, width=6, state="readonly",
                      values=["8", "12", "16", "24", "32", "44", "56"]).grid(row=0, column=1, sticky="w", **pad)
-        ttk.Button(misc, text="Write", command=self._do_write_width).grid(row=0, column=2, **pad)
+        ttk.Button(misc, text="Write (test FW only)", command=self._do_write_width).grid(row=0, column=2, **pad)
         ttk.Button(misc, text="Read", command=lambda: self._quick(CMD_GET_HW_INFO)).grid(row=0, column=3, **pad)
 
         ttk.Label(misc, text="LED brightness:").grid(row=1, column=0, sticky="e", **pad)
@@ -1941,7 +1941,9 @@ class App:
             frame, _ = self._req(addr, CMD_SET_SERIAL, payload, timeout_s=2.0)
             if frame is None or frame.cmd != CMD_ACK:
                 if frame is not None and frame.payload[:1] == b"\x08":
-                    self._log("   This feeder has a factory serial (AT24CS02); it can't be overridden.", "err")
+                    self._log("   Refused (ERR_LOCKED): either the AT24CS02 has a factory serial, or this is the production "
+                              "firmware, which never writes the write-protected AT24. Use the TAPJIG_TEST build "
+                              "(pio run -e atmega328pb_isp_test) to program a serial.", "err")
                 elif frame is not None and frame.payload[:1] == b"\x07":
                     self._log("   EEPROM write/verify failed - run I2C scan to see what answers.", "err")
                 return
@@ -1959,6 +1961,9 @@ class App:
             if frame is not None and frame.cmd == CMD_ACK:
                 self._req(addr, CMD_GET_HW_INFO, expect=(CMD_HW_INFO,))  # read it back; the card updates from it
             else:
+                if frame is not None and frame.payload[:1] == b"":
+                    self._log("   Refused (ERR_LOCKED): the production firmware never writes the write-protected AT24. "
+                              "Tape width is set by the TAP-Jig's test firmware (pio run -e atmega328pb_isp_test on the bench).", "err")
                 self._step_from_frame("width", frame)
         self._start_worker("write tape width", run)
 
