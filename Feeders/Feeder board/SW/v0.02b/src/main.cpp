@@ -727,6 +727,7 @@ void setFeedPitchMm(float mm);
 uint8_t feedOnePitch(unsigned long timeoutMs);
 uint8_t moveFeedCoupled(float mm, unsigned long timeoutMs);
 void applyLedBrightness();
+void flashRxLed();
 void setExtLed(bool on);
 void identifyBlink(uint8_t count);
 float readAngleDeg();
@@ -915,6 +916,7 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
         hwInfo.tapeWidthMm
       };
       sendFrame(CMD_DISCOVER_HERE, reply, sizeof(reply));
+      flashRxLed();
       return;
     }
     if (cmd == CMD_ASSIGN_ADDR) {
@@ -924,6 +926,7 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
       if (!isValidAssignedAddress(payload[2])) return;
       busAddress = payload[2];
       sendFrame(CMD_ACK, &payload[2], 1); // now sent under the new unicast address
+      flashRxLed();
       return;
     }
   }
@@ -931,6 +934,7 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
   // Everything else requires a real unicast address - broadcast or our own.
   const bool forUs = (addr == 0x00) || (addr == busAddress);
   if (!forUs || busAddress == ADDR_UNASSIGNED) return;
+  flashRxLed(); // this feeder is the one being talked to
 
   switch (cmd) {
     case CMD_PING: {
@@ -1564,6 +1568,7 @@ Adafruit_NeoPixel statusLed(1, PIN_RGB_DATA, NEO_GRB + NEO_KHZ800);
 
 // Release status colors (v0.01a):
 //   yellow = booting, not ready yet
+//   green flash = a frame addressed to this feeder just arrived (blue flash in peel mode)
 //   green  = ready, PEEL control mode (v0.02b, SW1+SW2 toggles)
 //   blue   = ready (booted, magnet detected)
 //   red    = error (no magnet, or DRV8833 fault)
@@ -1594,6 +1599,21 @@ void applyLedBrightness() {
 // Button control mode (v0.02b): feed (blue) or peel (green). SW1+SW2
 // together toggle it - see handleButtons().
 bool peelMode = false;
+
+// Bus activity cue (v0.02b): a short flash whenever a frame addressed to
+// THIS feeder arrives (unicast or broadcast), plus its discovery/assign
+// replies, so on a bus with several feeders it's obvious which one is
+// answering. Green in feed mode; blue in peel mode, where steady green is
+// already the mode color. loop() holds the flash for RX_FLASH_MS and then
+// repaints the real status; a move/peel started by the frame overrides it
+// with purple straight away.
+constexpr unsigned long RX_FLASH_MS = 80;
+unsigned long rxFlashUntilMs = 0;
+
+void flashRxLed() {
+  rxFlashUntilMs = millis() + RX_FLASH_MS;
+  if (peelMode) setStatusLedColor(0, 0, 255); else setStatusLedColor(0, 255, 0);
+}
 
 void ledBooting() { setStatusLedColor(255, 255, 0); }
 void ledReady()   { if (peelMode) setStatusLedColor(0, 255, 0); else setStatusLedColor(0, 0, 255); }
@@ -2611,7 +2631,8 @@ void loop() {
   // Status RGB: blue = ready, red = error (no magnet / driver fault).
   // Purple (moving) is set inside the move/peel functions themselves and
   // gets repainted here on the next iteration once they return.
-  if (magnet && digitalRead(PIN_nFAULT) != LOW) ledReady();
+  if ((long)(rxFlashUntilMs - now) > 0) { /* bus-activity flash still showing */ }
+  else if (magnet && digitalRead(PIN_nFAULT) != LOW) ledReady();
   else ledError();
 
   if (now - lastHeartbeatMs >= 3000) {

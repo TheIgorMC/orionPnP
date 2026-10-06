@@ -74,6 +74,21 @@ measured). **Not yet run on a real board.**
    - The held-through-boot guard is kept: a button down at power-up isn't
      armed until released once.
 
+4. **Green flash on bus traffic.** Whenever a frame addressed to this
+   feeder arrives (unicast, or broadcast once it has an address), plus its
+   own discovery/assign replies, the status RGB flashes green for 80 ms
+   (`RX_FLASH_MS`), so on a bus with several feeders it is obvious which
+   one is answering. In peel mode, where steady green already means the
+   mode, the flash is blue. Frames for other addresses and CRC failures do
+   not flash. A move or peel started by the frame turns the LED purple
+   right away; the flash only holds off the idle repaint. Brightness
+   follows `LEDBRIGHT`.
+
+5. **PC tools** (`../tools/`): the GUI was reworked for first tests (live
+   feeder card, bring-up checklist, peel-rate helper, LED brightness,
+   remembered settings, always-visible STOP) and `sim_feeder.py` lets it be
+   tried without hardware. See `../tools/README.md`.
+
 ## Open questions
 
 Everything open in `v0.02/project.md` and `v0.01a/project.md` still is, plus:

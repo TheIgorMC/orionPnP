@@ -101,6 +101,33 @@ class Frame:
                 f"  | {decode_payload(self.cmd, self.payload)}")
 
 
+def parse_status(p: bytes):
+    """CMD_STATUS_INFO payload -> dict, or None if too short. iMon/relay are
+    only present on beta1/v0.01a+ firmware (8-byte payload)."""
+    if len(p) < 5:
+        return None
+    status = p[2]
+    md, ml, mh = bool(status & 0x20), bool(status & 0x10), bool(status & 0x08)
+    d = {
+        "angle_raw": (p[0] << 8) | p[1],
+        "magnet": "NONE" if not md else ("WEAK" if ml else ("STRONG" if mh else "OK")),
+        "fault": bool(p[3]),
+        "last_err": ERROR_CODES.get(p[4], f"0x{p[4]:02X}"),
+        "imon_raw": None,
+        "relay": None,
+    }
+    d["angle_deg"] = d["angle_raw"] * 360.0 / 4096.0
+    if len(p) >= 8:
+        d["imon_raw"] = (p[5] << 8) | p[6]
+        d["relay"] = bool(p[7])
+    return d
+
+
+# Factory IMON calibration (200 mA at raw 833) - the feeder's own CALI value
+# may differ, so anything derived from this is approximate.
+IMON_DEFAULT_MA_PER_COUNT = 200.0 / 833.0
+
+
 def decode_payload(cmd: int, p: bytes) -> str:
     """Best-effort human-readable decode of a known reply's payload."""
     try:

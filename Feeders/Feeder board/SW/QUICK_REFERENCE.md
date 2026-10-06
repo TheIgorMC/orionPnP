@@ -35,6 +35,7 @@ magnet / driver fault), purple = motor moving, white = IDENTIFY.
 | `LEDBRIGHT [<1-255>]` | **v0.02b+** — show / set status RGB brightness (saved, default 40) |
 | `PEELRATE [<ms/mm>]` | **v0.02b+** — show / set peel per mm of feed (saved; `0` = off). With a rate set, `FEED`/SW1 peel forward after the sprocket moves, `SNAP` peels in reverse before it moves back. Not used by `FASTFEED`/`MOVEMM`/`GOMM`/`JOG` |
 | *buttons* | **v0.02b+** — SW1+SW2 together toggle feed mode (blue) / peel mode (green). Feed: SW1 = feed a tooth (long = fast feed), SW2 unused. Peel: SW1 held = peel fwd, SW2 held = peel rev. Peel mode times out to feed after 30 s |
+| *status LED* | **v0.02b+** — blue = ready (feed mode), green = ready (peel mode), purple = moving, red = error, yellow = booting, white = identify. A short **green flash** (blue in peel mode) means a frame addressed to this feeder just arrived |
 | `SETWIDTH <mm>` | **alpha02+** — set this unit's tape width (8/12/16/24/32/44/56), assembly/bench-time, mirrors `CMD_SET_HW_INFO` (alpha02: ATmega EEPROM; alpha03+: AT24CS02) |
 | `SERIAL` | **alpha03+** — print the AT24CS02's factory-programmed 128-bit serial number as hex, mirrors `CMD_GET_SERIAL` |
 | `RELAY ON` / `OFF` | **beta1 only** — force the RS485 bus-connect relay, bench-only override, bypasses the 5V-stable gate |

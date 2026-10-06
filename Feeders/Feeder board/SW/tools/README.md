@@ -31,33 +31,54 @@ cheap adapters wire DE to RTS instead of auto-detecting direction), tick
 "RTS controls TX (DE)" before connecting.
 
 Every frame that arrives shows up in the log, decoded where the payload
-shape is known. The **Target addr** box plus Ping / Get Status / Identify /
-Stop motors stay visible above the tabs:
+shape is known (the once-a-second live refresh and the config read stay
+out of it). Port, address and a few settings are remembered in
+`~/.orionpnp_rs485_gui.json`.
 
-- **Address setup.** Feeders boot unassigned every power-up. **Scan +
-  assign** does discovery and assignment in one click when exactly one
-  unassigned feeder answers, then sets Target addr. Plain **Scan**
-  auto-fills the Nonce box for a manual **Assign**.
-- **Feed & peel test.** Set the pitch (Set pitch reads it back), then
-  Feed once / Peel once, or **Run cycle test**: N cycles of feed-then-peel
-  (or peel-then-feed, or just one of them), waiting for each ACK and
-  logging how long each step took, with min/avg/max at the end. In
-  v0.01a, `CMD_FEED_NEXT` only turns the sprocket and never runs the
-  peel motor, so this host-side sequencing is the only way to pair them
-  for now. They can't overlap: the feeder doesn't listen to the bus while
-  a motor is running.
-- **Jog & zero** (v0.02 firmware). Buttons jog the sprocket by -4 ... +4 mm
+**The feeder card** (left, always visible) is the part to watch during
+first tests: the target **Address**, Ping / Identify / Refresh, a big red
+**STOP** (also **Esc**), and live readouts that refresh once a second while
+nothing else is running: link health, magnet (detected / none / too weak /
+too strong), motor-driver fault, RS485 relay, wheel angle, 12V current
+(approximate, from the factory calibration - the feeder's own `CALI` value
+may differ) and the last move error. Below that, **Saved on this feeder**
+shows component id, tape zero, pitch, tape width, peel time and peel rate,
+read automatically the first time the feeder answers (and with **Read from
+feeder**). Fields show "n/a" on firmware that doesn't have them. **STOP**
+aborts the running sequence and broadcasts `CMD_STOP`; a feeder only hears
+it between moves, because it does not listen to the bus while a motor runs.
+The Identify button blinks the feeder's status LED white. v0.02b feeders
+also flash their status LED green (blue in peel mode) whenever a frame is
+addressed to them, so you can see which one is answering.
+
+Tabs:
+
+- **Bring-up.** A first-test checklist: connect, address, link, magnet and
+  fault, tape width, pitch, zero, feed once, peel rate. Each row has its
+  own button. Ticks come from what the feeder reports, so a feeder that
+  was set up earlier shows up already done, and a red cross says why.
+- **Feed & peel.** Pitch and Feed once; the **peel rate** (v0.02b: peel
+  follows feed, ms per mm) with a helper that turns a measured peel time
+  for a known feed into a rate; the fixed-time peel (v0.02: Peel once,
+  save/read the saved time, run it); and **Run cycle test**: N cycles of
+  feed / peel in the order you pick, waiting for each ACK and logging how
+  long each step took, with min/avg/max at the end. With a peel rate saved
+  a feed already peels, so use "feed only" (the GUI warns if a cycle would
+  peel twice). On v0.02 and earlier the host-side feed-then-peel cycle is
+  the only way to pair them. Nothing overlaps: the feeder doesn't listen
+  to the bus while a motor is running.
+- **Jog & zero** (v0.02+). Buttons jog the sprocket by -4 ... +4 mm
   (4 mm = one tooth) or a custom distance, each reply shows the new raw
-  angle, then **Set zero here** stores it as the tape zero.
-- **Peel calibration** (Feed & peel tab, v0.02). Find the peel time with
-  the cycle test, **Save time above to feeder** keeps it on that feeder,
-  and "Peel steps use the feeder's saved time" makes the cycle test and
-  CMD_PEEL use it (leave the packet builder's duration blank for the same).
-- **EEPROM / serial** (v0.02). **I2C scan** shows what answers on the
-  feeder's bus. If Get serial NACKs but the scan shows 0x50 and no 0x58,
-  the chip is a plain AT24C02 with no factory serial: **Random** +
-  **Program serial** writes one (read back to verify). Also writes tape
-  width.
+  angle, then **Set zero here** stores it as the tape zero. Jog does not
+  move the peel motor.
+- **Setup.** Address: **Scan** lists every unassigned feeder (nonce,
+  component, tape width) so you can pick one and **Assign** it, or **Scan +
+  assign** does both when exactly one answers and sets the address. Tape
+  width (write/read). Status-LED brightness (v0.02b: saved on the feeder,
+  presets 10-255). EEPROM: **I2C scan** shows what answers on the feeder's
+  bus; if Get serial NACKs but the scan shows 0x50 and no 0x58, the chip is
+  a plain AT24C02 with no factory serial: **Random** + **Program serial**
+  writes one (read back to verify).
 - **Packet builder.** Pick a command and fill in named fields (pitch in
   mm, peel time in ms, dropdowns for direction/motor/on-off). It shows
   what the command does, which reply to expect, gotchas, and a live
@@ -65,6 +86,20 @@ Stop motors stay visible above the tabs:
   puts the frame on the clipboard for use in another serial terminal. The
   payload hex box can be edited by hand to send something malformed.
   Broadcast-only commands (Discover/Assign) always go to addr 0x00.
+
+## Trying it without hardware
+
+`sim_feeder.py` (Linux/macOS only - it uses a pseudo-terminal) behaves
+roughly like v0.02b firmware: boots unassigned, answers discovery and the
+v0.02/v0.02b commands, and goes deaf while a "motor" runs.
+
+```
+python sim_feeder.py [--addr N] [--no-magnet]
+```
+
+It prints a device path such as `/dev/pts/5`; type that into the GUI's
+Port box (or `rs485_sender.py --port`). It is not a faithful model of the
+firmware, only enough to exercise the tools.
 
 ## CLI / REPL
 
