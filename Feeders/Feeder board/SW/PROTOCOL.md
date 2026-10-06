@@ -79,7 +79,7 @@ see **Error codes** below; otherwise empty).
 | Command | Code | Payload → | Reply | Notes |
 |---|---|---|---|---|
 | `CMD_PING` | `0x01` | — | `CMD_PONG` (`0x81`) | liveness check |
-| `CMD_DISCOVER` | `0x10` | broadcast, — | `CMD_DISCOVER_HERE` (`0x90`): `[nonceHi,nonceLo,componentIdHi,componentIdLo,tapeWidthMm]` | only unassigned feeders react |
+| `CMD_DISCOVER` | `0x10` | broadcast, — | `CMD_DISCOVER_HERE` (`0x90`): `[nonceHi,nonceLo,componentIdHi,componentIdLo,tapeWidthMm]` + **v0.02b**: `[lastAddr,posXHi,posXLo]` | only unassigned feeders react |
 | `CMD_ASSIGN_ADDR` | `0x11` | broadcast, `[nonceHi,nonceLo,newAddr]` | `CMD_ACK` under the new address | only the matching nonce adopts it |
 | `CMD_GET_COMPONENT` | `0x20` | — | `CMD_COMPONENT_INFO` (`0xA0`): `[idHi,idLo,zeroHi,zeroLo,feedHalfTeeth]` | |
 | `CMD_SET_COMPONENT` | `0x21` | `[idHi,idLo]` | `CMD_ACK` | resets tape zero + pitch if the id actually changed |
@@ -106,6 +106,8 @@ see **Error codes** below; otherwise empty).
 | `CMD_SET_PEEL_RATE` | `0x3B` | **v0.02b+** — `[hi,lo]` in 0.1 ms-of-peel per mm of sprocket travel (5–5000; `0` = off) | `CMD_ACK` (echo) / `CMD_NACK [ERR_BAD_PARAM]` | couples peel to feed. A forward feed (`CMD_FEED_NEXT`, SW1) moves the sprocket, **then** peels forward for `rate × mm`. A backward seat (`SNAP`, post-homing) peels in **reverse first**, by the same `rate × mm`, then moves. Not applied to `CMD_JOG`, fast feed, `MOVEMM`/`GOMM`. `CMD_FEED_NEXT`'s reply now arrives after the peel too (peel is capped at 5 s). Per feeder, internal EEPROM, independent of the component |
 | `CMD_GET_PEEL_RATE` | `0x3C` | **v0.02b+** — — | `CMD_PEEL_RATE_INFO` (`0xA6`): `[hi,lo]` | `0xFFFF` = unset (no coupling) |
 | `CMD_FEED_BACK` | `0x3D` | **v0.02b+** — — | `CMD_ACK` / `CMD_NACK [errCode]` | the mirror of `CMD_FEED_NEXT`: back up by the configured pitch; with a peel rate set, peel in **reverse first**, then move. `ERR_NOT_READY` if no pitch is set. Blocks for the move plus the peel |
+| `CMD_SET_POSITION` | `0x3E` | **v0.02b+** — `[xHi,xLo]` opaque slot position (suggested unit 0.1 mm along X; `0xFFFF` = clear) | `CMD_ACK` (echo) | persisted in the internal EEPROM; announced in `CMD_DISCOVER_HERE`. A cheap layout check for the host, not proof of identity |
+| `CMD_GET_POSITION` | `0x3F` | **v0.02b+** — — | `CMD_POSITION_INFO` (`0xA7`): `[xHi,xLo,lastAddr]` | `0xFFFF` = unset, `lastAddr` 0 = never assigned |
 | `CMD_T_INPUTS` | `0x40` | **test build only** — — | `CMD_T_INPUTS_INFO` (`0xB0`): `[flags,imonHi,imonLo,v5Hi,v5Lo]` | flags: b0 SW1 down, b1 SW2 down, b2 DRV nFAULT low, b3 relay coil on, b4 magnet detected. TAP-Jig only (`-DTAPJIG_TEST`); the production build ignores it |
 | `CMD_T_UPTIME` | `0x41` | **test build only** — — | `0xB1`: `[ms x4 big-endian, MCUSR at boot]` | bit 1 of MCUSR = external reset |
 | `CMD_T_RGB` | `0x42` | **test build only** — `[r,g,b]` (all 0 = release) | `CMD_ACK` | holds the status RGB |

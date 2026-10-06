@@ -112,6 +112,30 @@ measured). **Not yet run on a real board.**
    of it and ignores those opcodes (the jig's final stage relies on that).
    Both builds were only compile-checked. See `../tools/TAPJIG.md`.
 
+7. **Tape width kept in the ATmega EEPROM too.** It used to live only on the
+   AT24; if that chip refused writes or did not answer, the width was lost.
+   Now `SETWIDTH`/`CMD_SET_HW_INFO` always writes an internal copy (EEPROM 64)
+   plus a best-effort AT24 copy, and at boot the AT24 copy wins when valid,
+   else the internal one is used and the AT24 is rewritten from it. The
+   internal EEPROM survives reflashing only with the `EESAVE` fuse (set by
+   this project's fuses) and is lost on a chip erase without it.
+
+8. **Slot identity: last address + position X.** The address is still
+   disposable (unassigned at every boot). Two things are now remembered
+   (EEPROM 68): the last assigned address and a host-set position `posX`
+   (`CMD_SET_POSITION`/`SETPOS`, opaque uint16, suggested 0.1 mm along X).
+   While unassigned, `CMD_DISCOVER_HERE` also carries `[lastAddr, posX]`.
+   Intended host flow (OpenPnP): broadcast `CMD_DISCOVER`; if every reply
+   reports the `(lastAddr, posX)` the saved layout expects (and no address is
+   claimed twice), re-assign each one its old address with
+   `CMD_ASSIGN_ADDR` and skip the rest of setup; any mismatch, a feeder with
+   `lastAddr` 0, or an unexpected extra feeder means the layout changed, so
+   fall back to normal assignment. `posX` is a consistency check, not proof
+   (two feeders can be swapped on the same positions); confirm with vision.
+   The GUI Setup tab shows both columns in the scan list, **Restore
+   addresses** does the flow above (refusing duplicates), and **Slot
+   position X** saves it. Not tested on hardware.
+
 ## Open questions
 
 Everything open in `v0.02/project.md` and `v0.01a/project.md` still is, plus:

@@ -36,6 +36,8 @@ class SimFeeder:
         self.peel_ms = 0xFFFF
         self.peel_rate = 0xFFFF  # 0.1 ms/mm
         self.led = 40
+        self.last_addr = 0
+        self.pos_x = 0xFFFF
         self.angle = 1234
         self.magnet_ok = True
         self.fault = False
@@ -73,9 +75,11 @@ class SimFeeder:
         if self.addr == 0 and a == 0:
             if c == 0x10:
                 time.sleep(random.uniform(0, 0.2))
-                send(0, 0x90, bytes([self.nonce >> 8, self.nonce & 255, self.component >> 8, self.component & 255, self.width]))
+                send(0, 0x90, bytes([self.nonce >> 8, self.nonce & 255, self.component >> 8, self.component & 255, self.width,
+                                     self.last_addr, self.pos_x >> 8, self.pos_x & 255]))
             elif c == 0x11 and len(p) >= 3 and ((p[0] << 8) | p[1]) == self.nonce:
                 self.addr = p[2]
+                self.last_addr = p[2]
                 send(self.addr, 0x82, p[2:3])
             return
         if self.addr == 0 or a not in (0, self.addr):
@@ -189,6 +193,11 @@ class SimFeeder:
                 return nack(ERR_BAD_PARAM)
             self.peel_rate = 0xFFFF if t == 0 else t
             ack(p)
+        elif c == 0x3E and len(p) >= 2:
+            self.pos_x = (p[0] << 8) | p[1]
+            ack(p)
+        elif c == 0x3F:
+            send(self.addr, 0xA7, bytes([self.pos_x >> 8, self.pos_x & 255, self.last_addr]))
         elif c == 0x3C:
             send(self.addr, 0xA6, bytes([self.peel_rate >> 8, self.peel_rate & 255]))
         else:

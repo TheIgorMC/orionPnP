@@ -685,21 +685,37 @@ bool isValidTapeWidthMm(uint8_t mm) {
   }
 }
 
+// v0.02b: the tape width is ALSO kept in the ATmega's own EEPROM (a mirror of
+// the AT24 copy), so it survives even when the external chip is absent,
+// unreadable or refuses writes, and it is what the boot read falls back to.
+// The AT24 copy still wins when valid (it survives a full ATmega erase); each
+// copy heals the other at boot.
+constexpr int EEPROM_HWINFO_MIRROR_LOCATION = 64;
+
 void loadHwInfo() {
   const bool readOk = at24csReadBytes(AT24CS02_EEPROM_ADDR, AT24CS02_HWINFO_MEM_ADDR,
                                        reinterpret_cast<uint8_t *>(&hwInfo), sizeof(hwInfo));
   if (!readOk) {
     Serial1.println(F("WARN: AT24CS02 not responding"));
   }
-  if (!readOk || hwInfo.crc != hwInfoCrc(hwInfo)) {
-    // Either the chip didn't answer, or it answered with blank/garbage
-    // EEPROM (factory-fresh chip, never set at assembly) - both cases
-    // start "unset" rather than trusting a nonsense value.
+  const bool extValid = readOk && hwInfo.crc == hwInfoCrc(hwInfo);
+  FeederHardwareInfo mirror;
+  EEPROM.get(EEPROM_HWINFO_MIRROR_LOCATION, mirror);
+  const bool mirrorValid = mirror.crc == hwInfoCrc(mirror);
+  if (extValid) {
+    if (!mirrorValid || mirror.tapeWidthMm != hwInfo.tapeWidthMm) EEPROM.put(EEPROM_HWINFO_MIRROR_LOCATION, hwInfo);
+    return;
+  }
+  // External copy missing or garbage: use the internal mirror, else start "unset"
+  // rather than trusting a nonsense value.
+  if (mirrorValid) hwInfo = mirror;
+  else {
     hwInfo.tapeWidthMm = TAPE_WIDTH_UNSET;
     hwInfo.crc = hwInfoCrc(hwInfo);
-    if (readOk) at24csWriteBytes(AT24CS02_EEPROM_ADDR, AT24CS02_HWINFO_MEM_ADDR,
-                                  reinterpret_cast<uint8_t *>(&hwInfo), sizeof(hwInfo));
   }
+  if (readOk) at24csWriteBytes(AT24CS02_EEPROM_ADDR, AT24CS02_HWINFO_MEM_ADDR,
+                                reinterpret_cast<uint8_t *>(&hwInfo), sizeof(hwInfo));
+  if (!mirrorValid) EEPROM.put(EEPROM_HWINFO_MIRROR_LOCATION, hwInfo);
 }
 
 // No "reset" function by design - this is meant to be set once at
@@ -710,8 +726,52 @@ bool setTapeWidthMm(uint8_t mm) {
   if (!isValidTapeWidthMm(mm)) return false;
   hwInfo.tapeWidthMm = mm;
   hwInfo.crc = hwInfoCrc(hwInfo);
-  return at24csWriteBytes(AT24CS02_EEPROM_ADDR, AT24CS02_HWINFO_MEM_ADDR,
-                           reinterpret_cast<uint8_t *>(&hwInfo), sizeof(hwInfo));
+  EEPROM.put(EEPROM_HWINFO_MIRROR_LOCATION, hwInfo); // internal copy: always succeeds
+  at24csWriteBytes(AT24CS02_EEPROM_ADDR, AT24CS02_HWINFO_MEM_ADDR,
+                   reinterpret_cast<uint8_t *>(&hwInfo), sizeof(hwInfo)); // external copy: best effort
+  return true;
+}
+
+// ---------------------------
+// Slot identity (v0.02b): the bus address is still disposable (every boot
+// starts unassigned), but two things are remembered so a host can restore a
+// known layout without re-learning it:
+//  - lastAddr: the address this feeder was last assigned;
+//  - posX: where the host says this feeder sits (opaque uint16, suggested
+//    unit 0.1 mm along the machine X axis), set with CMD_SET_POSITION.
+// Both are announced in CMD_DISCOVER_HERE while unassigned. A host that finds
+// every feeder still reporting the (lastAddr, posX) it expects can re-assign
+// the same addresses with no further work; a mismatch means a feeder was
+// added, removed or moved. posX is a cheap check, not proof: vision confirms.
+// Internal EEPROM, independent of the component config.
+// ---------------------------
+struct SlotInfo {
+  uint8_t lastAddr; // 0 = never assigned
+  uint16_t posX;    // 0xFFFF = not set
+  uint8_t crc;
+};
+
+constexpr int EEPROM_SLOT_LOCATION = 68;
+constexpr uint16_t POS_X_UNSET = 0xFFFF;
+
+SlotInfo slotInfo;
+
+uint8_t slotInfoCrc(const SlotInfo &s) {
+  return crc8(reinterpret_cast<const uint8_t *>(&s), sizeof(SlotInfo) - 1);
+}
+
+void saveSlotInfo() {
+  slotInfo.crc = slotInfoCrc(slotInfo);
+  EEPROM.put(EEPROM_SLOT_LOCATION, slotInfo);
+}
+
+void loadSlotInfo() {
+  EEPROM.get(EEPROM_SLOT_LOCATION, slotInfo);
+  if (slotInfo.crc != slotInfoCrc(slotInfo)) {
+    slotInfo.lastAddr = 0;
+    slotInfo.posX = POS_X_UNSET;
+    saveSlotInfo();
+  }
 }
 
 // Host is expected to call this whenever it learns/decides what's loaded.
@@ -865,7 +925,7 @@ constexpr uint8_t CMD_PONG = 0x81;
 // component it already remembers being loaded with (host can skip
 // re-asking "what do you carry" if this is a known/persisted value).
 constexpr uint8_t CMD_DISCOVER = 0x10;      // broadcast, no payload
-constexpr uint8_t CMD_DISCOVER_HERE = 0x90; // payload: [nonceHi,nonceLo,componentIdHi,componentIdLo,tapeWidthMm]
+constexpr uint8_t CMD_DISCOVER_HERE = 0x90; // payload: [nonceHi,nonceLo,componentIdHi,componentIdLo,tapeWidthMm] + v0.02b: [lastAddr (0=none),posXHi,posXLo (0xFFFF=unset)]
 constexpr uint8_t CMD_ASSIGN_ADDR = 0x11;   // broadcast, payload: [nonceHi,nonceLo,newAddr]
                                              // only the matching nonce adopts newAddr
 
@@ -911,6 +971,9 @@ constexpr uint8_t CMD_T_UPTIME = 0x41;       // -> CMD_T_UPTIME_INFO [ms x4 big-
 constexpr uint8_t CMD_T_UPTIME_INFO = 0xB1;
 constexpr uint8_t CMD_T_RGB = 0x42;          // [r,g,b] hold the status RGB (all 0 = release) -> CMD_ACK
 constexpr uint8_t CMD_T_MOTOR = 0x43;        // [motor(0=A,1=B), dir(0/1), ms x10 (1-255)] open loop, full duty -> CMD_ACK [faultSeen] / CMD_NACK
+constexpr uint8_t CMD_SET_POSITION = 0x3E;  // payload: [xHi,xLo] opaque slot position (0xFFFF = clear) -> CMD_ACK (echo) - v0.02b, persisted
+constexpr uint8_t CMD_GET_POSITION = 0x3F;  // -> CMD_POSITION_INFO - v0.02b
+constexpr uint8_t CMD_POSITION_INFO = 0xA7; // payload: [xHi,xLo,lastAddr]
 constexpr uint8_t CMD_FEED_BACK = 0x3D;     // no payload: back by the configured pitch, peel reversed first if a PeelRate is set -> CMD_ACK / CMD_NACK [errCode] - v0.02b
 constexpr uint8_t CMD_SET_LED_BRIGHTNESS = 0x3A; // payload: [level 1-255] -> CMD_ACK (echo) / CMD_NACK ERR_BAD_PARAM - v0.02b, status RGB, persisted
 constexpr uint8_t CMD_SET_PEEL_RATE = 0x3B; // payload: [hi,lo] 0.1 ms-of-peel per mm of feed (5-5000, 0 = clear/off) -> CMD_ACK (echo) / CMD_NACK ERR_BAD_PARAM - v0.02b, persisted
@@ -952,10 +1015,11 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
   if (addr == ADDR_UNASSIGNED && busAddress == ADDR_UNASSIGNED) {
     if (cmd == CMD_DISCOVER) {
       delay(random(0, DISCOVERY_JITTER_MAX_MS));
-      uint8_t reply[5] = {
+      uint8_t reply[8] = {
         (uint8_t)(sessionNonce >> 8), (uint8_t)(sessionNonce & 0xFF),
         (uint8_t)(cfg.componentId >> 8), (uint8_t)(cfg.componentId & 0xFF),
-        hwInfo.tapeWidthMm
+        hwInfo.tapeWidthMm,
+        slotInfo.lastAddr, (uint8_t)(slotInfo.posX >> 8), (uint8_t)(slotInfo.posX & 0xFF)
       };
       sendFrame(CMD_DISCOVER_HERE, reply, sizeof(reply));
       flashRxLed();
@@ -967,6 +1031,7 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
       if (targetNonce != sessionNonce) return; // not us
       if (!isValidAssignedAddress(payload[2])) return;
       busAddress = payload[2];
+      if (slotInfo.lastAddr != busAddress) { slotInfo.lastAddr = busAddress; saveSlotInfo(); }
       sendFrame(CMD_ACK, &payload[2], 1); // now sent under the new unicast address
       flashRxLed();
       return;
@@ -1146,6 +1211,18 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
       break;
     }
 #endif
+    case CMD_SET_POSITION: {
+      if (len < 2) { const uint8_t e = ERR_BAD_PARAM; sendFrame(CMD_NACK, &e, 1); break; }
+      slotInfo.posX = ((uint16_t)payload[0] << 8) | payload[1];
+      saveSlotInfo();
+      sendFrame(CMD_ACK, payload, 2);
+      break;
+    }
+    case CMD_GET_POSITION: {
+      const uint8_t reply[3] = { (uint8_t)(slotInfo.posX >> 8), (uint8_t)(slotInfo.posX & 0xFF), slotInfo.lastAddr };
+      sendFrame(CMD_POSITION_INFO, reply, sizeof(reply));
+      break;
+    }
     case CMD_FEED_BACK: {
       if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) { const uint8_t e = ERR_NOT_READY; lastMoveError = e; sendFrame(CMD_NACK, &e, 1); break; }
       const uint8_t err = moveFeedCoupled(-mmForHalfTeeth(cfg.feedHalfTeeth), MOVE_TIMEOUT_MS);
@@ -2361,7 +2438,11 @@ void printStatus() {
   if (cfg.feedHalfTeeth == FEED_HALF_TEETH_UNSET) Serial1.print('-'); else Serial1.print(mmForHalfTeeth(cfg.feedHalfTeeth), 1);
   Serial1.print(F("mm width="));
   if (hwInfo.tapeWidthMm == TAPE_WIDTH_UNSET) Serial1.print('-'); else Serial1.print(hwInfo.tapeWidthMm);
-  Serial1.print(F("mm inv="));
+  Serial1.print(F("mm pos="));
+  if (slotInfo.posX == POS_X_UNSET) Serial1.print('-'); else Serial1.print(slotInfo.posX);
+  Serial1.print(F(" lastAddr="));
+  if (slotInfo.lastAddr == 0) Serial1.print('-'); else Serial1.print(slotInfo.lastAddr);
+  Serial1.print(F(" inv="));
   Serial1.print(invertMotorA ? 'A' : '-');
   Serial1.print(invertMotorB ? 'B' : '-');
   Serial1.print(F(" serial="));
@@ -2399,7 +2480,7 @@ void printHelp() {
     "Move : STEP <teeth> | T<n> | A<deg> | MOVEMM <mm> | FEED | FASTFEED | SNAP | GOTOZERO | GOMM <mm> | STOP\n"
     "Peel : PEEL <ms>  (negative = reverse, max 5000) | PEELCAL [<ms>] | PEELRUN [REV] | PEELRATE [<ms/mm>] (0=off; feed peels after, seat un-peels first)\n"
     "Tape : ZEROHERE | PITCH <mm> | COMPONENT <id> | FEEDCFG <raw> <halfTeeth> | RESETCFG\n"
-    "Setup: ZERO | INVERTA ON|OFF | INVERTB ON|OFF | SETWIDTH <mm> | SIMADDR <n>\n"
+    "Setup: ZERO | INVERTA ON|OFF | INVERTB ON|OFF | SETWIDTH <mm> | SIMADDR <n> | SETPOS <x> | POS\n"
     "Power: IMON | 5VSTATUS | I5V | RELAY ON|OFF | CALI <mA> | CALV <V> | CALSTATUS | CALRESET\n"
     "Info : STATUS | SERIAL | SETSERIAL <32 hex> | I2CSCAN | SELFTEST | IDENTIFY [n] | LED ON|OFF | TRACE ON|OFF | LEDBRIGHT [<1-255>] | HELP"));
 }
@@ -2568,6 +2649,21 @@ void handleDebugLine(const char *line) {
     printOk();
     return;
   }
+  if (CMD_IS("POS")) {
+    Serial1.print(F("pos="));
+    if (slotInfo.posX == POS_X_UNSET) Serial1.print('-'); else Serial1.print(slotInfo.posX);
+    Serial1.print(F(" lastAddr="));
+    if (slotInfo.lastAddr == 0) Serial1.println('-'); else Serial1.println(slotInfo.lastAddr);
+    return;
+  }
+  if ((arg = CMD_ARG("SETPOS "))) {
+    const long v = parseInt(arg);
+    if (v < 0 || v > 0xFFFF) { Serial1.println(F("ERR: SETPOS <0-65535> (65535 = clear)")); return; }
+    slotInfo.posX = (uint16_t)v;
+    saveSlotInfo();
+    printOk();
+    return;
+  }
   if (CMD_IS("MODE")) { printButtonMode(); return; }
   if (CMD_IS("MODE FEED")) { buttonMode = MODE_FEED; lastButtonActivityMs = millis(); printButtonMode(); return; }
   if (CMD_IS("MODE PEEL")) { buttonMode = MODE_PEEL; lastButtonActivityMs = millis(); printButtonMode(); return; }
@@ -2732,6 +2828,7 @@ void setup() {
   seedSessionNonce(); // also reseeds random() - safe to draw the homing jitter right after
   homingReadyAtMs = millis() + HOMING_BOOT_DELAY_MS + random(0, HOMING_BOOT_JITTER_MAX_MS + 1);
   loadConfig(); // busAddress always starts ADDR_UNASSIGNED - re-earned via CMD_DISCOVER each boot
+  loadSlotInfo();
   loadHwInfo(); // tape width etc - set once at assembly, never reset by config changes
   loadFactorySerial(); // AT24CS02 identification page - read fresh every boot, never cached to EEPROM
 

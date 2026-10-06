@@ -51,6 +51,8 @@ CMD_NAMES = {
     0x3B: "CMD_SET_PEEL_RATE",
     0x3C: "CMD_GET_PEEL_RATE", 0xA6: "CMD_PEEL_RATE_INFO",
     0x3D: "CMD_FEED_BACK",
+    0x3E: "CMD_SET_POSITION",
+    0x3F: "CMD_GET_POSITION", 0xA7: "CMD_POSITION_INFO",
     0x40: "CMD_T_INPUTS", 0xB0: "CMD_T_INPUTS_INFO",
     0x41: "CMD_T_UPTIME", 0xB1: "CMD_T_UPTIME_INFO",
     0x42: "CMD_T_RGB",
@@ -143,7 +145,11 @@ def decode_payload(cmd: int, p: bytes) -> str:
             comp = (p[2] << 8) | p[3]
             comp_s = "UNSET" if comp == 0xFFFF else str(comp)
             width = "UNSET" if p[4] == 0xFF else f"{p[4]}mm"
-            return f"nonce=0x{nonce:04X} componentId={comp_s} tapeWidth={width}"
+            out = f"nonce=0x{nonce:04X} componentId={comp_s} tapeWidth={width}"
+            if len(p) >= 8:  # v0.02b+: slot identity
+                px = (p[6] << 8) | p[7]
+                out += f" lastAddr={'none' if p[5] == 0 else p[5]} posX={'UNSET' if px == 0xFFFF else px}"
+            return out
         if cmd == 0xA0 and len(p) >= 5:  # CMD_COMPONENT_INFO
             comp = (p[0] << 8) | p[1]
             zero = (p[2] << 8) | p[3]
@@ -176,6 +182,9 @@ def decode_payload(cmd: int, p: bytes) -> str:
         if cmd == 0xA4 and len(p) >= 2:  # CMD_PEEL_TIME_INFO (v0.02+)
             ms = (p[0] << 8) | p[1]
             return "peelTime=UNCALIBRATED" if ms == 0xFFFF else f"peelTime={ms}ms"
+        if cmd == 0xA7 and len(p) >= 3:  # CMD_POSITION_INFO (v0.02b+)
+            px = (p[0] << 8) | p[1]
+            return f"posX={'UNSET' if px == 0xFFFF else px} lastAddr={'none' if p[2] == 0 else p[2]}"
         if cmd == 0xA6 and len(p) >= 2:  # CMD_PEEL_RATE_INFO (v0.02b+)
             t = (p[0] << 8) | p[1]
             return "peelRate=UNSET (no feed/peel coupling)" if t == 0xFFFF else f"peelRate={t / 10:.1f}ms/mm"
@@ -509,6 +518,12 @@ COMMAND_SPECS = {
                   notes="v0.02b+. A forward feed peels forward AFTER the sprocket moves; a backward seat peels in reverse BEFORE it moves. "
                         "Feed replies take longer by the peel time. Unset = no coupling."),
     0x3C: CmdSpec("Read the peel rate.", "CMD_PEEL_RATE_INFO: tenths of ms/mm (0xFFFF = unset)", notes="v0.02b+."),
+    0x3E: CmdSpec("Save where this feeder sits (an opaque slot position, e.g. X in 0.1 mm). Shown in the discovery reply, so a host can check a layout after a power cycle.",
+                  "CMD_ACK (echo)",
+                  [Field("posX", "u16", "0", "0-65534; 65535 = clear", hi=65535)],
+                  notes="v0.02b+. A cheap consistency check, not proof of identity."),
+    0x3F: CmdSpec("Read the saved slot position and the last assigned bus address.",
+                  "CMD_POSITION_INFO: [posXHi,posXLo,lastAddr]", notes="v0.02b+."),
     0x3D: CmdSpec("Back the sprocket up by one configured pitch; with a peel rate saved, the peel runs in reverse first.",
                   "CMD_ACK, or CMD_NACK [errCode] (ERR_NOT_READY if no pitch is set)",
                   notes="v0.02b+. The mirror of CMD_FEED_NEXT. Blocks for the move plus the peel."),
