@@ -1,0 +1,100 @@
+# v0.02b
+
+Forked from `v0.02`. Everything in `v0.02/project.md` (and `v0.01a/`,
+`beta1/` behind it) still applies; this file only covers what is new.
+Protocol details are in `../PROTOCOL.md`.
+
+**Status:** syntax-checked with `avr-g++` against the Arduino AVR core and
+`Adafruit_NeoPixel` (no errors, no `-Wall` warnings; PlatformIO itself
+could not be run in the authoring environment, so flash/RAM sizes are not
+measured). **Not yet run on a real board.**
+
+## What's new
+
+1. **Status RGB brightness is adjustable and saved.** `LEDBRIGHT <1-255>`
+   (debug) / `CMD_SET_LED_BRIGHTNESS` (`0x3A`). Stored in the ATmega EEPROM
+   (`LedCfg` at 48, CRC'd), applied immediately. Default is now 40 (was a
+   fixed 128). An SK6812 channel draws ~18 mA at 255, so a single blue
+   channel at 40 is ~3 mA, yellow (two channels) ~6 mA. Tune by eye with
+   `LEDBRIGHT`; `STATUS` prints `led=`. Brightness change re-sets the last
+   color from its raw value (NeoPixel's `setBrightness` rescales stored
+   pixels lossily).
+
+2. **Peel is tied to feed distance.** New per-feeder `PeelRate`
+   (`PEELRATE <ms/mm>` / `CMD_SET_PEEL_RATE` `0x3B`, read with
+   `CMD_GET_PEEL_RATE` `0x3C`): milliseconds of peel-motor run per mm of
+   sprocket travel, stored in 0.1 ms/mm units (EEPROM 52, CRC'd, survives
+   component changes and `RESETCFG`, like `PeelCal`). Unset = no coupling,
+   exactly v0.02 behaviour (`PEELRATE 0` clears it).
+   - **Forward feed** (`FEED`, `CMD_FEED_NEXT`, SW1 short press): the
+     sprocket moves first, then the peel motor runs forward for
+     `rate x mm`. Peel is normally *after* feeding: the carrier advances
+     and the cover tape comes off at the peel point afterwards.
+   - **Backward seat** (`snapToToothBackward()`, i.e. `SNAP` and the seat
+     after boot homing): the peel motor runs in *reverse first* by
+     `rate x backwardMm`, then the sprocket moves back. Reason: going back
+     against already-peeled cover tape is hard; reversing the peel first
+     gives it slack. Same rate in both directions, so the amounts match
+     because the sprocket distance matches. Skipped below 0.3 mm.
+   - Sequential, not simultaneous: two motors starting at once would stack
+     their breakaway currents on the 5V rail / 12V eFuse (the problem the
+     soft-start work in v0.01a was for). Proportional in amount, ordered in
+     time.
+   - **Not coupled:** fast feed (tape loading), `CMD_JOG`, `MOVEMM`, `GOMM`,
+     `STEP`/`T`/`A`. Those are loading/calibration moves; they leave the
+     peel motor alone.
+   - Peel run time is capped at 5 s per action (`PEEL_CMD_MAX_MS`). A
+     peel-time DRV8833 fault returns `ERR_FAULT`.
+   - Consequence for a host: `CMD_FEED_NEXT` now replies after
+     move + peel. A host that also sends `CMD_PEEL` after each feed would
+     peel twice once a rate is set. The PC GUI's "feed only" cycle option
+     is the right one then.
+   - `PEELCAL`/`PEELRUN`/`CMD_PEEL` (fixed-duration peel) are unchanged.
+     `PEELCAL` is a fixed time with no distance attached; `PEELRATE` is
+     the distance-proportional one. The v0.02 open question ("a 2 mm and
+     an 8 mm feed need different amounts of peel") is what this answers.
+
+3. **Buttons: SW1+SW2 together switch control mode** (chosen over
+   "SW2 peels only before the first feed", which would be a hidden,
+   stateful rule):
+   - **Feed mode (blue, default):** SW1 short = feed one tooth (with the
+     coupled peel), SW1 hold >= 700 ms = fast feed one turn. SW2 does
+     nothing yet (its intended final role, UNFEED, is still a TODO).
+   - **Peel mode (green):** SW1 held = peel forward, SW2 held = peel in
+     reverse, each only while held (10 s cap), for tensioning by feel.
+   - Press both within an 80 ms window (`CHORD_WINDOW_MS`) to toggle. The
+     window means every single press now waits up to 80 ms before acting,
+     so a chord never fires as a feed first. After a chord both buttons
+     must be released before anything else registers.
+   - Peel mode returns to feed mode after 30 s without a button press
+     (`PEEL_MODE_IDLE_TIMEOUT_MS`), so a forgotten mode can't turn the next
+     SW1 press into a peel.
+   - Green was unused in the release status colors (yellow booting, blue
+     ready, red error, purple moving, white identify).
+   - The held-through-boot guard is kept: a button down at power-up isn't
+     armed until released once.
+
+## Open questions
+
+Everything open in `v0.02/project.md` and `v0.01a/project.md` still is, plus:
+
+- **`PEELRATE` has no default and no measured value.** v0.02's
+  `PEELCAL 1570` was for an unstated distance. Measure: peel ms for a known
+  feed (e.g. a 4 mm tooth) until the cover tape stays taut, divide by the
+  mm.
+- Whether the forward peel should start slightly *before* the feed ends
+  (overlap) instead of strictly after is untested; strictly after is the
+  safe choice for the current budget.
+- Reverse peel before a backward seat is applied on the boot-time seat as
+  well. If the cover tape isn't threaded yet it just spins the peel motor
+  for under one tooth's worth.
+- SW2 has no function in feed mode. UNFEED (feed backwards, peel reversed
+  first via the same coupling) would be the natural fit.
+- Brightness default (40) is a guess for "visible but cheap"; adjust on the
+  bench.
+- Not built with PlatformIO here: confirm flash/RAM on the real toolchain.
+  The first flash does not change fuses relative to v0.02.
+
+## Build / flash
+
+Same as v0.02 (`flash.ps1`, `pio run -e atmega328pb_isp -t upload`).

@@ -99,6 +99,9 @@ see **Error codes** below; otherwise empty).
 | `CMD_JOG` | `0x37` | **v0.02+** — `[hi,lo]` signed, 0.1 mm units (±1600) | `CMD_ACK [angleRawHi,angleRawLo]` / `CMD_NACK [errCode]` | relative move of the sprocket (negative = backwards), same closed-loop move/stall/timeout handling as `CMD_FEED_NEXT`. The ACK carries the new raw angle. Use to seat a hole, then `CMD_ZERO_HERE`. Blocks like a feed |
 | `CMD_I2C_SCAN` | `0x38` | **v0.02+** — — | `CMD_I2C_SCAN_INFO` (`0xA5`): responding 7-bit addresses, up to 16 | diagnoses the AT24: `0x36` AS5600, `0x50`–`0x57` EEPROM, `0x58`–`0x5F` AT24CS02 serial page |
 | `CMD_SET_SERIAL` | `0x39` | **v0.02+** — 16 serial bytes | `CMD_ACK` / `CMD_NACK [ERR_LOCKED \| ERR_I2C]` | programs a serial into the normal EEPROM (offset `0x10`, with CRC) and reads it back. Only for a plain AT24C02; `ERR_LOCKED` if an AT24CS02 factory serial exists |
+| `CMD_SET_LED_BRIGHTNESS` | `0x3A` | **v0.02b+** — `[level]` (1–255) | `CMD_ACK` (echo) / `CMD_NACK [ERR_BAD_PARAM]` | status RGB brightness, saved in internal EEPROM (default 40). Applied immediately |
+| `CMD_SET_PEEL_RATE` | `0x3B` | **v0.02b+** — `[hi,lo]` in 0.1 ms-of-peel per mm of sprocket travel (5–5000; `0` = off) | `CMD_ACK` (echo) / `CMD_NACK [ERR_BAD_PARAM]` | couples peel to feed. A forward feed (`CMD_FEED_NEXT`, SW1) moves the sprocket, **then** peels forward for `rate × mm`. A backward seat (`SNAP`, post-homing) peels in **reverse first**, by the same `rate × mm`, then moves. Not applied to `CMD_JOG`, fast feed, `MOVEMM`/`GOMM`. `CMD_FEED_NEXT`'s reply now arrives after the peel too (peel is capped at 5 s). Per feeder, internal EEPROM, independent of the component |
+| `CMD_GET_PEEL_RATE` | `0x3C` | **v0.02b+** — — | `CMD_PEEL_RATE_INFO` (`0xA6`): `[hi,lo]` | `0xFFFF` = unset (no coupling) |
 
 ## Error codes
 

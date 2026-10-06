@@ -351,7 +351,8 @@ class App:
         pad = {"padx": 4, "pady": 4}
         tab = ttk.Frame(parent)
         ttk.Label(tab, foreground="#c64600", wraplength=760, justify="left", text=(
-            "The firmware does not couple feed and peel: CMD_FEED_NEXT only turns the sprocket (motor A). "
+            "v0.02 and earlier do not couple feed and peel: CMD_FEED_NEXT only turns the sprocket (motor A). "
+            "v0.02b+ does once a peel rate is set (CMD_SET_PEEL_RATE) - then use 'feed only' below, or the peel runs twice. "
             "The cycle test below runs them back-to-back from the PC, waiting for each ACK. They can't overlap: "
             "the feeder doesn't listen to the bus while a motor runs.")
         ).grid(row=0, column=0, columnspan=8, sticky="w", **pad)

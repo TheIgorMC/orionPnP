@@ -47,6 +47,9 @@ CMD_NAMES = {
     0x37: "CMD_JOG",
     0x38: "CMD_I2C_SCAN", 0xA5: "CMD_I2C_SCAN_INFO",
     0x39: "CMD_SET_SERIAL",
+    0x3A: "CMD_SET_LED_BRIGHTNESS",
+    0x3B: "CMD_SET_PEEL_RATE",
+    0x3C: "CMD_GET_PEEL_RATE", 0xA6: "CMD_PEEL_RATE_INFO",
     0x82: "CMD_ACK",
     0x83: "CMD_NACK",
 }
@@ -141,6 +144,9 @@ def decode_payload(cmd: int, p: bytes) -> str:
         if cmd == 0xA4 and len(p) >= 2:  # CMD_PEEL_TIME_INFO (v0.02+)
             ms = (p[0] << 8) | p[1]
             return "peelTime=UNCALIBRATED" if ms == 0xFFFF else f"peelTime={ms}ms"
+        if cmd == 0xA6 and len(p) >= 2:  # CMD_PEEL_RATE_INFO (v0.02b+)
+            t = (p[0] << 8) | p[1]
+            return "peelRate=UNSET (no feed/peel coupling)" if t == 0xFFFF else f"peelRate={t / 10:.1f}ms/mm"
         if cmd == 0xA5:  # CMD_I2C_SCAN_INFO (v0.02+)
             return describe_i2c_scan(p)
     except Exception as exc:  # malformed/short payload from a flaky link - don't crash the caller
@@ -461,6 +467,16 @@ COMMAND_SPECS = {
                   "CMD_ACK, or CMD_NACK ERR_LOCKED (factory serial exists) / ERR_I2C (EEPROM problem)",
                   [Field("serial", "hex16", "", "32 hex digits")],
                   notes="v0.02+. Not needed on an AT24CS02: its factory serial is read-only and always wins."),
+    0x3A: CmdSpec("Set the status RGB brightness (stored on the feeder, survives reboots).",
+                  "CMD_ACK (echo), or CMD_NACK ERR_BAD_PARAM",
+                  [Field("level", "u8", "40", "1-255", lo=1, hi=255)],
+                  notes="v0.02b+."),
+    0x3B: CmdSpec("Set how much the peel motor runs per mm of sprocket travel, so feeds and backward seats move the peel too.",
+                  "CMD_ACK (echo), or CMD_NACK ERR_BAD_PARAM",
+                  [Field("rate", "u16", "100", "0.1 ms of peel per mm of feed: 5-5000 (e.g. 100 = 10 ms/mm); 0 = off", hi=5000)],
+                  notes="v0.02b+. A forward feed peels forward AFTER the sprocket moves; a backward seat peels in reverse BEFORE it moves. "
+                        "Feed replies take longer by the peel time. Unset = no coupling."),
+    0x3C: CmdSpec("Read the peel rate.", "CMD_PEEL_RATE_INFO: tenths of ms/mm (0xFFFF = unset)", notes="v0.02b+."),
 }
 
 
