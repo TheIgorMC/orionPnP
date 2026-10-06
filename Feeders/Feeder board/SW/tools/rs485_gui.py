@@ -805,8 +805,8 @@ class App:
         ttk.Entry(jig, textvariable=self.prod_baud_var, width=8).grid(row=0, column=4, **pad)
         self.prod_connect_btn = ttk.Button(jig, text="Connect", width=11, command=self._prod_toggle_connect)
         self.prod_connect_btn.grid(row=0, column=5, **pad)
-        ttk.Label(jig, textvariable=self.prod_status_var).grid(row=0, column=6, sticky="w", **pad)
-        ttk.Button(jig, text="Safe state", command=self._prod_safe).grid(row=0, column=7, **pad)
+        ttk.Button(jig, text="Safe state", command=self._prod_safe).grid(row=0, column=6, **pad)
+        ttk.Label(jig, textvariable=self.prod_status_var).grid(row=0, column=7, sticky="w", **pad)
         self._prod_refresh_ports()
 
         unit = ttk.LabelFrame(tab, text="Unit, routine and programmer")
