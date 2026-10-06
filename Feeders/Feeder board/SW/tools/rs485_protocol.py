@@ -388,6 +388,8 @@ class Field:
       choice - one byte picked from `choices` [(label, value), ...]
       mm10   - entered in mm (decimal, signed), sent as signed 16-bit 0.1mm units (CMD_JOG)
       hex16  - 32 hex digits sent as 16 raw bytes (CMD_SET_SERIAL)
+      pos    - slot position: millimetres by default ("14.3" or "14.3mm"), a raw 0.1 mm count
+               with an "r" suffix ("143r"), or "clear" (0xFFFF); sent as unsigned 16 bit (CMD_SET_POSITION)
     """
 
     def __init__(self, name, kind, default, help="", choices=None, lo=0, hi=None, optional=False):
@@ -407,6 +409,14 @@ class Field:
             if tenths == 0 or not -self.hi <= tenths <= self.hi:
                 raise ValueError(f"{self.name}: {text}mm out of range (0.1 to {self.hi / 10:g} mm, either sign)")
             return (tenths & 0xFFFF).to_bytes(2, "big")
+        if self.kind == "pos":
+            t = text.lower().replace(" ", "")
+            if t in ("clear", "unset", "-"):
+                return b"\xff\xff"
+            raw = int(t[:-1], 0) if t.endswith("r") else round(float(t[:-2] if t.endswith("mm") else t) * 10)
+            if not 0 <= raw <= 0xFFFE:
+                raise ValueError(f"{self.name}: {text} out of range (0 to 6553.4 mm, or 'clear')")
+            return raw.to_bytes(2, "big")
         if self.kind == "hex16":
             digits = text.replace(" ", "").replace("-", "")
             if len(digits) != 32:
@@ -520,7 +530,7 @@ COMMAND_SPECS = {
     0x3C: CmdSpec("Read the peel rate.", "CMD_PEEL_RATE_INFO: tenths of ms/mm (0xFFFF = unset)", notes="v0.02b+."),
     0x3E: CmdSpec("Save where this feeder sits (an opaque slot position, e.g. X in 0.1 mm). Shown in the discovery reply, so a host can check a layout after a power cycle.",
                   "CMD_ACK (echo)",
-                  [Field("posX", "u16", "0", "0-65534; 65535 = clear", hi=65535)],
+                  [Field("posX", "pos", "0", "mm (14.3 or 14.3mm), raw 0.1 mm units with r (143r), or clear")],
                   notes="v0.02b+. A cheap consistency check, not proof of identity."),
     0x3F: CmdSpec("Read the saved slot position and the last assigned bus address.",
                   "CMD_POSITION_INFO: [posXHi,posXLo,lastAddr]", notes="v0.02b+."),

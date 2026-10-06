@@ -1112,7 +1112,7 @@ class App:
         ttk.Entry(addr, textvariable=self.posx_var, width=8).grid(row=2, column=2, sticky="w", **pad)
         ttk.Button(addr, text="Save on feeder", command=self._do_set_position).grid(row=2, column=3, columnspan=2, **pad)
         ttk.Button(addr, text="Read", command=lambda: self._quick(CMD_GET_POSITION)).grid(row=2, column=5, **pad)
-        ttk.Label(addr, foreground=COLOR_DIM, text="raw (0.1 mm units) or e.g. 123.4mm").grid(row=2, column=6, columnspan=2, sticky="w", **pad)
+        ttk.Label(addr, foreground=COLOR_DIM, text="mm (14.3), raw 0.1 mm units (143r) or clear").grid(row=2, column=6, columnspan=2, sticky="w", **pad)
         self.scan_tree.bind("<<TreeviewSelect>>", self._on_scan_select)
         ttk.Label(addr, foreground=COLOR_DIM, wraplength=330, justify="left", text=(
             "Scan lists every unassigned feeder. Pick one and Assign, or use Scan + assign when exactly one answers. "
@@ -1602,13 +1602,10 @@ class App:
         if addr is None:
             return
         try:
-            text = self.posx_var.get().strip().lower().replace(" ", "")
-            # raw units (1 unit = 0.1 mm), or millimetres with an "mm" suffix: 123.4mm
-            x = int(round(float(text[:-2]) * 10)) if text.endswith("mm") else int(text, 0)
-            if not 0 <= x <= 0xFFFF:
-                raise ValueError
+            # millimetres by default (14.3 or 14.3mm), raw 0.1 mm units with an "r" (143r), or "clear"
+            x = int.from_bytes(COMMAND_SPECS[CMD_SET_POSITION].fields[0].encode(self.posx_var.get()), "big")
         except ValueError:
-            self._log(f"Bad position: '{self.posx_var.get()}' (0-65535 raw, or e.g. 123.4mm)", "err")
+            self._log(f"Bad position: '{self.posx_var.get()}' (mm like 14.3, raw like 143r, or clear)", "err")
             return
 
         def run():

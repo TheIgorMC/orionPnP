@@ -49,7 +49,7 @@ three button modes and a green flash on bus traffic (see the rows below).
 | `JOG <mm>` | **v0.02+** — relative sprocket move, ±0.1–160 mm (same as `MOVEMM`), mirrors `CMD_JOG`. Never touches the peel motor |
 | `I2CSCAN` | **v0.02+** — list the 7-bit addresses that answer on the I2C bus (`0x36` AS5600, `0x50`–`0x57` EEPROM, `0x58`+ AT24CS02 serial page) |
 | `SETSERIAL <32 hex>` | **v0.02+** — program a 16-byte serial into a plain AT24C02 (read back and verified); refused if a factory serial exists. Mirrors `CMD_SET_SERIAL` |
-| `SETPOS <x>` / `POS` | **v0.02b+** — set / show this feeder's saved slot position and last assigned address (also in `STATUS`), mirrors `CMD_SET_POSITION` |
+| `SETPOS <mm|143r|CLEAR>` / `POS` | **v0.02b+** — set / show this feeder's saved slot position and last assigned address (also in `STATUS`), mirrors `CMD_SET_POSITION` |
 | `LEDBRIGHT [<1-255>]` | **v0.02b+** — show / set status RGB brightness (saved, default 40) |
 | `PEELRATE [<ms/mm>]` | **v0.02b+** — show / set peel per mm of feed (saved; `0` = off). With a rate set, `FEED`/SW1 peel forward after the sprocket moves, `SNAP` peels in reverse before it moves back. Not used by `FASTFEED`/`MOVEMM`/`GOMM`/`JOG` |
 | *buttons* | **v0.02b+** — SW1 = forward, SW2 = reverse, in three modes; SW1+SW2 together step to the next. **Feed only** (blue, boot default): SW1 = feed a tooth (hold = fast feed), SW2 = back a tooth, no peel. **Peel only** (orange): SW1 / SW2 held = peel fwd / rev. **Feed+peel** (green): SW1 = feed then peel, SW2 = peel reverse then back a tooth (needs a peel rate). Peel-only drops back to feed-only after 2 min idle. `MODE [FEED\|PEEL\|BOTH]` shows / sets it from the debug port |
