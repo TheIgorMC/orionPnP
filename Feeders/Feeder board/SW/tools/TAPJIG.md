@@ -186,3 +186,36 @@ no_serial|no_fiber|stuck_sw1` makes one thing wrong.
   may not be pogo-toggleable; add a stage once that is settled.
 - Which stages the DUT-side commands cover when the board has no magnet
   (stage 5 and 8 assume the servo arm is parked away).
+
+## TODO: portable production station (Raspberry Pi) and multi-product support
+
+Target hardware: Raspberry Pi 3B (1 GB) + 7" 1024x600 IPS capacitive touch
+HDMI monitor (USB-powered, USB touch), everything from one 5 V supply
+(about 5 V / 4-5 A; the jig needs a 5->12 V boost for the DUT's VIN). Not
+started; decisions so far:
+
+- [ ] **Separate kiosk app** for production (keep `rs485_gui.py` as the
+      engineering tool): fullscreen 1024x600, touch-sized buttons, product
+      selector, big PASS/FAIL banner, stage list, run/stop. No packet
+      builder, calibration or peel controls. Settings behind a long press.
+      On-screen keyboard for the rare text entry (operator name).
+- [ ] **Split the engine into a package** (runner, expression checks, ISP,
+      logging) shared by both apps and `tapjig_run.py`.
+- [ ] **Product folders** (data only): `product.json`, routine, test and
+      production hex, fuse bytes, per-unit options (e.g. tape widths),
+      `requires_jig`. A `current.json` pointer chooses the release rather than
+      "newest file".
+- [ ] **Jig profile**: which jig this is and what it supports (commands,
+      nodes, ISP part); the jig's `HELLO` reports its type. Reject a routine
+      that needs something the jig lacks before the run starts. Selector
+      auto-picks the product when only one matches the jig.
+- [ ] **Pluggable DUT command layer** per product (feeder: RS-485 frames;
+      mainboard: TBD once its test interface is known). Plugins live in the
+      repo, never on the share.
+- [ ] **SMB share** (`cifs` mount): sync the selected release to local disk
+      and verify checksums before a run (a network drop must not interrupt a
+      flash); write logs locally first, then copy them to the share; record
+      release version and hashes in every unit log.
+- [ ] **Pi setup notes**: autostart in kiosk mode, udev rules (jig, USBasp),
+      avrdude install, undervoltage check, read-only root or at least a
+      writable log partition.
