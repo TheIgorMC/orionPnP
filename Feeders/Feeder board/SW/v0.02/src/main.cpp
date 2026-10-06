@@ -453,6 +453,10 @@ bool setPeelCalMs(uint16_t ms) {
 // ---------------------------
 constexpr uint8_t AT24CS02_EEPROM_ADDR = 0x50;  // general-purpose EEPROM, read/write
 constexpr uint8_t AT24CS02_SERIAL_ADDR = 0x58;  // identification page, read-only, factory-programmed
+// The 128-bit serial lives at word address 0x80-0x8F of that page (AT24CS02
+// datasheet), NOT at 0x00: the device address ACKs (so I2CSCAN shows 0x58) but
+// the word address 0x00 is refused, which made every read fail with ERR_I2C.
+constexpr uint8_t AT24CS02_SERIAL_MEM_ADDR = 0x80;
 constexpr unsigned long AT24CS02_WRITE_CYCLE_MS = 5; // internal write cycle time; no ack-polling implemented, just a fixed delay
 
 bool at24csReadBytes(uint8_t i2cAddr, uint8_t memAddr, uint8_t *buf, uint8_t len) {
@@ -503,7 +507,7 @@ bool serialAvailable() { return factorySerialValid || userSerialValid; }
 uint8_t serialBlockCrc(const uint8_t *s) { return crc8(s, FACTORY_SERIAL_LEN); }
 
 void loadFactorySerial() {
-  factorySerialValid = at24csReadBytes(AT24CS02_SERIAL_ADDR, 0x00, factorySerial, FACTORY_SERIAL_LEN);
+  factorySerialValid = at24csReadBytes(AT24CS02_SERIAL_ADDR, AT24CS02_SERIAL_MEM_ADDR, factorySerial, FACTORY_SERIAL_LEN);
   userSerialValid = false;
   if (factorySerialValid) return;
 
@@ -930,6 +934,7 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
       break;
     }
     case CMD_GET_SERIAL: {
+      if (!serialAvailable()) loadFactorySerial(); // boot read may have failed (chip not settled): retry on demand
       if (!serialAvailable()) { const uint8_t e = ERR_I2C; sendFrame(CMD_NACK, &e, 1); break; }
       sendFrame(CMD_SERIAL_INFO, factorySerial, FACTORY_SERIAL_LEN);
       break;
@@ -2166,6 +2171,7 @@ void handleDebugLine(const char *line) {
     return;
   }
   if (CMD_IS("SERIAL")) {
+    if (!serialAvailable()) loadFactorySerial();
     if (!serialAvailable()) { Serial1.println(F("serial n/a")); return; }
     for (uint8_t i = 0; i < FACTORY_SERIAL_LEN; i++) {
       if (factorySerial[i] < 0x10) Serial1.print('0');
