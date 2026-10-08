@@ -699,40 +699,34 @@ bool isValidTapeWidthMm(uint8_t mm) {
   }
 }
 
-// v0.02b: the tape width is ALSO kept in the ATmega's own EEPROM (a mirror of
-// the AT24 copy), so it survives even when the external chip is absent,
-// unreadable or refuses writes, and it is what the boot read falls back to.
-// The AT24 copy (written once by the jig's test firmware, read-only after)
-// wins when valid; the internal copy only fills in when the AT24 is absent or
-// blank. The production firmware never writes the AT24.
-constexpr int EEPROM_HWINFO_MIRROR_LOCATION = 64;
+// v0.02b: the tape width lives in the ATmega's own EEPROM (location 64), NOT
+// on the AT24, which is for the serial number only for now. The internal
+// EEPROM survives reflashing and the jig's chip erase because the EESAVE fuse
+// is programmed (board_hardware.eesave = yes).
+//
+// TAPE_WIDTH_OVERRIDE is a temporary DEBUG switch: while 1, any firmware
+// build lets SETWIDTH / CMD_SET_HW_INFO change the width, so it can be set on
+// the bench without the jig. Set it to 0 to lock it down: then only the
+// TAPJIG_TEST build can write it (the jig's stage 14), and production
+// answers ERR_LOCKED.
+#ifndef TAPE_WIDTH_OVERRIDE
+#define TAPE_WIDTH_OVERRIDE 1
+#endif
+#if defined(TAPJIG_TEST) || TAPE_WIDTH_OVERRIDE
+#define TAPE_WIDTH_WRITABLE 1
+#else
+#define TAPE_WIDTH_WRITABLE 0
+#endif
+constexpr int EEPROM_HWINFO_LOCATION = 64;
 
 void loadHwInfo() {
-  const bool readOk = at24csReadBytes(AT24CS02_EEPROM_ADDR, AT24CS02_HWINFO_MEM_ADDR,
-                                       reinterpret_cast<uint8_t *>(&hwInfo), sizeof(hwInfo));
-  if (!readOk) {
-    Serial1.println(F("WARN: AT24CS02 not responding"));
-  }
-  const bool extValid = readOk && hwInfo.crc == hwInfoCrc(hwInfo);
-  FeederHardwareInfo mirror;
-  EEPROM.get(EEPROM_HWINFO_MIRROR_LOCATION, mirror);
-  const bool mirrorValid = mirror.crc == hwInfoCrc(mirror);
-  if (extValid) {
-    if (!mirrorValid || mirror.tapeWidthMm != hwInfo.tapeWidthMm) EEPROM.put(EEPROM_HWINFO_MIRROR_LOCATION, hwInfo);
-    return;
-  }
-  // External copy missing or garbage: use the internal mirror, else start "unset"
-  // rather than trusting a nonsense value.
-  if (mirrorValid) hwInfo = mirror;
-  else {
+  EEPROM.get(EEPROM_HWINFO_LOCATION, hwInfo);
+  if (hwInfo.crc != hwInfoCrc(hwInfo)) {
+    // Blank/garbage EEPROM: start "unset" rather than trusting a nonsense value.
     hwInfo.tapeWidthMm = TAPE_WIDTH_UNSET;
     hwInfo.crc = hwInfoCrc(hwInfo);
+    EEPROM.put(EEPROM_HWINFO_LOCATION, hwInfo);
   }
-#if AT24_WRITES
-  if (readOk) at24csWriteBytes(AT24CS02_EEPROM_ADDR, AT24CS02_HWINFO_MEM_ADDR,
-                                reinterpret_cast<uint8_t *>(&hwInfo), sizeof(hwInfo));
-#endif
-  if (!mirrorValid) EEPROM.put(EEPROM_HWINFO_MIRROR_LOCATION, hwInfo);
 }
 
 // No "reset" function by design - this is meant to be set once at
@@ -741,14 +735,13 @@ void loadHwInfo() {
 // a nonsense value that later confuses a host's compatibility check.
 bool setTapeWidthMm(uint8_t mm) {
   if (!isValidTapeWidthMm(mm)) return false;
-#if !AT24_WRITES
-  return false; // production build: tape width is factory data on the (write protected) AT24, set by the test firmware
+#if !TAPE_WIDTH_WRITABLE
+  return false; // locked: only the jig's test build may change it (TAPE_WIDTH_OVERRIDE = 0)
 #else
   hwInfo.tapeWidthMm = mm;
   hwInfo.crc = hwInfoCrc(hwInfo);
-  EEPROM.put(EEPROM_HWINFO_MIRROR_LOCATION, hwInfo); // internal copy: fallback if the AT24 is ever absent
-  return at24csWriteBytes(AT24CS02_EEPROM_ADDR, AT24CS02_HWINFO_MEM_ADDR,
-                          reinterpret_cast<uint8_t *>(&hwInfo), sizeof(hwInfo));
+  EEPROM.put(EEPROM_HWINFO_LOCATION, hwInfo);
+  return true;
 #endif
 }
 
@@ -1136,7 +1129,7 @@ void handleFrame(uint8_t addr, uint8_t cmd, const uint8_t *payload, uint8_t len)
       break;
     }
     case CMD_SET_HW_INFO: {
-      if (len < 1 || !setTapeWidthMm(payload[0])) { const uint8_t e = AT24_WRITES ? ERR_BAD_PARAM : ERR_LOCKED; sendFrame(CMD_NACK, &e, 1); break; }
+      if (len < 1 || !setTapeWidthMm(payload[0])) { const uint8_t e = TAPE_WIDTH_WRITABLE ? ERR_BAD_PARAM : ERR_LOCKED; sendFrame(CMD_NACK, &e, 1); break; }
       sendFrame(CMD_ACK, payload, 1);
       break;
     }
@@ -2287,15 +2280,20 @@ float toothGridOffsetDeg() {
   return cfg.tapeZeroRaw == TAPE_ZERO_UNSET ? 0.0f : raw12ToAngleDeg(cfg.tapeZeroRaw);
 }
 
-// Seat the wheel on the nearest tooth, ALWAYS approaching BACKWARDS (the
-// tooth at or behind the current angle, never the one ahead) - moving
-// backwards never pushes extra tape forward past the pick point. If
-// already within tolerance of a tooth, stays put.
-uint8_t snapToToothBackward() {
+// Seat the wheel on a tooth of the grid. backwardOnly = the tooth at or
+// behind the current angle, never the one ahead (SNAP, and any seat after a
+// tape is loaded): moving backwards never pushes extra tape forward past the
+// pick point. !backwardOnly = the NEAREST tooth either way, at most half a
+// tooth (4.5 deg, 2 mm) of travel - used by boot homing, which must never
+// spin the wheel to a stored angle. If already within tolerance of a tooth,
+// stays put.
+uint8_t snapToTooth(bool backwardOnly) {
   const float offset = toothGridOffsetDeg();
   const float rel = normalizeDeg(readAngleDeg() - offset);
   float snapped = floorf(rel / DEG_PER_TOOTH) * DEG_PER_TOOTH;
-  if (DEG_PER_TOOTH - (rel - snapped) <= ANGLE_TOLERANCE_DEG) snapped += DEG_PER_TOOTH; // already on the next tooth
+  if (!backwardOnly) {
+    if (rel - snapped >= DEG_PER_TOOTH / 2.0f) snapped += DEG_PER_TOOTH; // the next tooth is closer
+  } else if (DEG_PER_TOOTH - (rel - snapped) <= ANGLE_TOLERANCE_DEG) snapped += DEG_PER_TOOTH; // already on the next tooth
   // Going backwards drags peeled cover tape: give the peel motor the same
   // distance of slack (same PeelRate as a forward feed) before moving.
   const float backMm = (rel - snapped) / DEG_PER_MM;
@@ -2306,6 +2304,8 @@ uint8_t snapToToothBackward() {
   targetAngleDeg = normalizeDeg(offset + snapped);
   return commandMoveTo(targetAngleDeg, MOVE_TIMEOUT_MS);
 }
+
+uint8_t snapToToothBackward() { return snapToTooth(true); }
 
 // Fast feed: one full sprocket turn forward (TOOTH_COUNT teeth, 160mm) for
 // loading tape. A single 360deg target equals the start angle, so it's
@@ -2376,8 +2376,12 @@ void calibrateZero() {
     stillDutyMax = DEFAULT_MIN_MOVE_DUTY - CAL_STEP_DUTY;
   }
 
-  moveToAngle(startAngle, CAL_RESTORE_TIMEOUT_MS);
-  snapToToothBackward(); // seat on a tooth, approaching backwards
+  // No "return to where it started" move and no move to the tape zero: after
+  // the ramps the wheel is within a tooth or so of where it began, so just
+  // seat on the NEAREST tooth from here (at most 4.5 deg either way). The pick
+  // position is always reached later by relative moves from this tooth.
+  (void)startAngle;
+  snapToTooth(false);
 }
 
 // ---------------------------
@@ -2417,6 +2421,8 @@ void calibrateZero() {
 constexpr unsigned long HOMING_BOOT_DELAY_MS = 1000;
 constexpr unsigned long HOMING_BOOT_JITTER_MAX_MS = 2000; // wider than DISCOVERY_JITTER_MAX_MS - staggers PSU inrush across a whole bus, not just a bus collision
 constexpr unsigned long HOMING_MAGNET_STABLE_MS = 5000;
+constexpr unsigned long HOMING_STAGGER_MS = 1000;   // one homing start per address, so motors don't all draw at once
+constexpr uint8_t HOMING_STAGGER_MAX_SLOTS = 60;    // cap: address 200 would otherwise wait over three minutes
 
 bool homingDone = false;
 unsigned long homingReadyAtMs = 0; // set once in setup(), after seedSessionNonce() reseeds random()
@@ -2600,7 +2606,7 @@ void handleDebugLine(const char *line) {
   }
   if ((arg = CMD_ARG("SETWIDTH "))) {
     if (setTapeWidthMm((uint8_t)parseInt(arg))) printOk();
-    else Serial1.println(AT24_WRITES ? F("ERR: 8/12/16/24/32/44/56 only, or AT24 write failed") : F("ERR: read-only in production firmware (set by the jig's test firmware)"));
+    else Serial1.println(TAPE_WIDTH_WRITABLE ? F("ERR: 8/12/16/24/32/44/56 only") : F("ERR: tape width is locked (TAPE_WIDTH_OVERRIDE = 0), set by the jig's test firmware"));
     return;
   }
   if (CMD_IS("SERIAL")) {
@@ -2854,9 +2860,14 @@ void setup() {
   waitFor5vStableAndEngageRelay(); // relay only ever engages once this confirms the 5V rail is stable - the real safety gate, unaffected by the test-aid removals above
 
   seedSessionNonce(); // also reseeds random() - safe to draw the homing jitter right after
-  homingReadyAtMs = millis() + HOMING_BOOT_DELAY_MS + random(0, HOMING_BOOT_JITTER_MAX_MS + 1);
+  loadSlotInfo(); // before the stagger below needs lastAddr
+  // Stagger homing by the address this feeder had last time (HOMING_STAGGER_MS
+  // per address), so a populated bus does not start all its motors together;
+  // a feeder that never had an address falls back to a random delay.
+  homingReadyAtMs = millis() + HOMING_BOOT_DELAY_MS
+      + (slotInfo.lastAddr ? (unsigned long)(slotInfo.lastAddr > HOMING_STAGGER_MAX_SLOTS ? HOMING_STAGGER_MAX_SLOTS : slotInfo.lastAddr) * HOMING_STAGGER_MS
+                           : (unsigned long)random(0, HOMING_BOOT_JITTER_MAX_MS + 1));
   loadConfig(); // busAddress always starts ADDR_UNASSIGNED - re-earned via CMD_DISCOVER each boot
-  loadSlotInfo();
   loadHwInfo(); // tape width etc - set once at assembly, never reset by config changes
   loadFactorySerial(); // AT24CS02 identification page - read fresh every boot, never cached to EEPROM
 

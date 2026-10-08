@@ -167,11 +167,10 @@ no_serial|no_fiber|stuck_sw1` makes one thing wrong.
 
 ## Open items (need a decision or a measurement)
 
-- **AT24 write protect**: the DUT's AT24 is write protected; stage 14 (test
-  firmware) needs the jig to release WP for the write and restore it
-  afterwards. Not yet a jig command or a routine step; add `WP` control to the
-  jig protocol and wrap stage 14 with it. Production firmware never writes the
-  AT24, so after stage 15 nothing can change those values.
+- **AT24 write protect**: the DUT's AT24 is write protected and only holds the
+  serial number. A plain AT24C02 needs the jig to release WP while the test
+  firmware writes the serial (stage 14); not yet a jig command or routine step.
+  The tape width is in the ATmega EEPROM, so no WP handling is needed for it.
 
 - **Jig firmware**: the 32u4 side of the protocol above is unwritten.
 - **Limits**: every number in the routine is a nominal-value guess. Calibrate on

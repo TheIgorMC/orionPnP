@@ -112,18 +112,19 @@ measured). **Not yet run on a real board.**
    of it and ignores those opcodes (the jig's final stage relies on that).
    Both builds were only compile-checked. See `../tools/TAPJIG.md`.
 
-7. **The AT24 is written only by the test firmware.** The AT24 is write
-   protected (WP) in the field and holds factory data (tape width, and a
-   serial on a plain AT24C02), written once in production by the TAP-Jig's
-   `TAPJIG_TEST` build (`AT24_WRITES`) and only read afterwards. The
-   production firmware never writes it: `at24csWriteBytes()` refuses without
-   touching the bus, there is no boot-time "initialise a blank chip" write
-   any more, and `SETWIDTH`/`CMD_SET_HW_INFO`/`CMD_SET_SERIAL` answer
-   `ERR_LOCKED` (to set a width on the bench, flash the test build). The tape
-   width is also mirrored in the ATmega EEPROM (location 64) by the test
-   build, used only if the AT24 is absent or blank; when the AT24 is valid it
-   wins and refreshes the mirror. The jig must release WP while the test
-   firmware writes (see `../tools/TAPJIG.md`).
+7. **Tape width: ATmega EEPROM, with a debug override.** The width lives in
+   the ATmega's internal EEPROM (location 64), not on the AT24, which holds the
+   serial number only for now. The internal EEPROM survives reflashing and the
+   jig's chip erase because `EESAVE` is programmed. `TAPE_WIDTH_OVERRIDE`
+   (default 1, a temporary debug switch near `loadHwInfo()`) lets any build set
+   it with `SETWIDTH` / `CMD_SET_HW_INFO`; set it to 0 to lock it down, after
+   which only the `TAPJIG_TEST` build (the jig's stage 14) can write it and
+   production answers `ERR_LOCKED`.
+
+   The AT24 is write protected in the field: `at24csWriteBytes()` refuses
+   outside the test build, so production firmware never writes it (that covers
+   `CMD_SET_SERIAL`, which needs the test build; the jig must release WP while
+   it writes a serial).
 
 8. **Slot identity: last address + position X.** The address is still
    disposable (unassigned at every boot). Two things are now remembered
@@ -140,6 +141,18 @@ measured). **Not yet run on a real board.**
    The GUI Setup tab shows both columns in the scan list, **Restore
    addresses** does the flow above (refusing duplicates), and **Slot
    position X** saves it. Not tested on hardware.
+
+9. **Homing: nearest tooth, staggered by last address.** Boot homing
+   (`calibrateZero()`) no longer moves back to where it started and never goes
+   to the tape zero: after the duty ramps it seats on the NEAREST tooth of the
+   grid (`snapToTooth(false)`, at most 4.5 deg / 2 mm either way). The pick
+   position is reached later by relative moves from that tooth. `SNAP` and
+   other seats still approach backwards only. A feeder starts homing
+   `HOMING_STAGGER_MS` (1 s) per previous bus address after the boot delay
+   (`lastAddr` x 1 s, capped at 60); a feeder with no remembered address uses a
+   random 0-2 s delay instead. The 5 s magnet-stable wait comes after that, so
+   the offsets are kept. Homing itself takes about 1-2 s, so with 1 s spacing
+   neighbouring feeders can briefly overlap.
 
 ## Open questions
 
