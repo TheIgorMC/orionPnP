@@ -26,9 +26,16 @@ measured). **Not yet run on a real board.**
    sprocket travel, stored in 0.1 ms/mm units (EEPROM 52, CRC'd, survives
    component changes and `RESETCFG`, like `PeelCal`). Unset = no coupling,
    exactly v0.02 behaviour (`PEELRATE 0` clears it).
-   - **Forward feed** (`FEED`, `CMD_FEED_NEXT`, SW1 short press): the
-     sprocket moves first, then the peel motor runs forward for
-     `rate x mm`. Peel is normally *after* feeding: the carrier advances
+   - **Forward feed** (`FEED`, `CMD_FEED_NEXT`, SW1 in feed+peel mode): the
+     peel motor runs forward for the full `rate x mm`, starting **once the
+     sprocket has travelled `PEEL_START_MM` (2 mm)**, so on a feed longer than
+     that the two overlap ("peel as we go", e.g. 4 mm at 325 ms/mm = 1300 ms
+     starting at the 2 mm point). A feed of 2 mm or less peels after it
+     finishes. The peel is a background job (`PeelJob`) that the move loop
+     services every pass, so the sprocket keeps its single continuous move
+     (no stop at 2 mm); if the feed fails, the peel is aborted, and the call
+     returns only when both are done. Both motors run together for part of
+     the feed, so their currents add (the peel ramps in over 100 ms). Peel is normally *after* feeding: the carrier advances
      and the cover tape comes off at the peel point afterwards.
    - **Backward seat** (`snapToToothBackward()`, i.e. `SNAP` and the seat
      after boot homing): the peel motor runs in *reverse first* by

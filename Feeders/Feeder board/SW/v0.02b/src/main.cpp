@@ -1930,6 +1930,64 @@ void runPeel(bool forward, unsigned long ms) {
   brakeMotorB();
 }
 
+// ---------------------------
+// Background peel (v0.02b): a peel that runs WHILE the sprocket is still
+// moving. runPeel() blocks; this does not - it is a small job that
+// peelJobService() advances, and moveToAngle() calls that every loop pass.
+// moveFeedCoupled() uses it so that on a long feed the peel starts once the
+// sprocket has travelled PEEL_START_MM instead of after the whole feed
+// (peeling as we go, so the cover tape never drags on a big feed).
+// ---------------------------
+constexpr float PEEL_START_MM = 2.0f; // a feed longer than this starts peeling when it reaches this point
+
+struct PeelJob {
+  bool active;
+  bool forward;
+  unsigned long startMs;
+  unsigned long durMs;
+};
+PeelJob peelJob = { false, true, 0, 0 };
+
+// Armed by moveFeedCoupled(): start the job when the wheel has moved armDeg from armAngle.
+struct PeelArm {
+  bool armed;
+  bool forward;
+  float armAngle;
+  float armDeg;
+  unsigned long ms;
+};
+PeelArm peelArm = { false, true, 0.0f, 0.0f, 0 };
+
+void peelJobStart(bool forward, unsigned long ms) {
+  if (ms == 0) return;
+  peelJob.active = true;
+  peelJob.forward = forward;
+  peelJob.startMs = millis();
+  peelJob.durMs = ms;
+}
+
+void peelJobAbort() {
+  peelArm.armed = false;
+  if (peelJob.active) { peelJob.active = false; brakeMotorB(); }
+}
+
+// Advance the job; true while it is still running. Stops (and brakes) at the end or on a driver fault.
+bool peelJobService() {
+  if (!peelJob.active) return false;
+  const unsigned long elapsed = millis() - peelJob.startMs;
+  if (elapsed >= peelJob.durMs || digitalRead(PIN_nFAULT) == LOW) {
+    peelJob.active = false;
+    brakeMotorB();
+    return false;
+  }
+  driveMotorB(softStartDuty(PEEL_DUTY, elapsed), peelJob.forward);
+  return true;
+}
+
+void peelJobFinish() {
+  while (peelJobService()) delay(1);
+}
+
 // SW1: short press = feed one tooth; hold >= SW1_LONG_PRESS_MS = fast
 // feed, one full sprocket turn (tape loading). Long press fires as soon as
 // the threshold is reached, not on release. Picked over double-press: no
@@ -2093,6 +2151,7 @@ void runRelayButtonTest() {
 // the per-150ms trace only prints with TRACE ON.
 uint8_t endMove(unsigned long moveId, uint8_t err, float angle) {
   brakeMotorA();
+  if (err != ERR_NONE) peelJobAbort(); // a failed move must not leave the peel motor running
   lastMoveError = err;
   lastHeartbeatAngleValid = false; // the wheel moved on purpose - don't let the heartbeat flag it
   Serial1.print(F("move ")); Serial1.print(moveId);
@@ -2138,6 +2197,13 @@ uint8_t moveToAngle(float target, unsigned long timeoutMs, bool passThrough = fa
 
     const float current = readAngleDeg();
     const float err = angleErrorDeg(target, current);
+
+    // Peel as we go: start the armed peel once the sprocket has travelled far enough.
+    if (peelArm.armed && fabsf(angleErrorDeg(current, peelArm.armAngle)) >= peelArm.armDeg) {
+      peelArm.armed = false;
+      peelJobStart(peelArm.forward, peelArm.ms);
+    }
+    peelJobService();
 
     if (passThrough && fabsf(err) <= PASS_THROUGH_DEG) return ERR_NONE;
     if (fabsf(err) <= ANGLE_TOLERANCE_DEG) return endMove(moveId, ERR_NONE, current);
@@ -2258,10 +2324,24 @@ uint8_t moveToTapeZeroPlusMm(float mm, unsigned long timeoutMs) {
 uint8_t moveFeedCoupled(float mm, unsigned long timeoutMs) {
   const unsigned long peelMs = peelMsForMm(mm);
   if (mm < 0 && peelMs) runPeel(false, peelMs);
+  const bool peelAfter = mm > 0 && peelMs;
+  if (peelAfter) {
+    // Forward feed: the peel starts when the sprocket has moved PEEL_START_MM (if the
+    // feed is longer than that) and runs for the full rate x mm, overlapping the rest
+    // of the feed; a feed of PEEL_START_MM or less just peels once it has finished.
+    peelArm.armed = true;
+    peelArm.forward = true;
+    peelArm.armAngle = readAngleDeg();
+    peelArm.armDeg = degForMm(PEEL_START_MM);
+    peelArm.ms = peelMs;
+  }
   const uint8_t err = moveByMm(mm, timeoutMs);
-  if (err != ERR_NONE) return err;
-  if (mm > 0 && peelMs) {
-    runPeel(true, peelMs);
+  const bool peelNotStarted = peelArm.armed; // the move ended before reaching PEEL_START_MM
+  peelArm.armed = false;
+  if (err != ERR_NONE) { peelJobAbort(); return err; }
+  if (peelAfter) {
+    if (peelNotStarted) peelJobStart(true, peelMs);
+    peelJobFinish();
     if (digitalRead(PIN_nFAULT) == LOW) { lastMoveError = ERR_FAULT; return ERR_FAULT; }
   }
   return ERR_NONE;

@@ -111,9 +111,11 @@ class SimFeeder:
             if self.half_teeth == 0xFF:
                 return nack(ERR_NOT_READY)
             mm = self.half_teeth * 2.0
-            time.sleep(0.4)
+            peel = self.peel_time_for(mm)
+            # peel starts after 2 mm of travel and overlaps the rest of the move
+            begin = 0.4 * min(1.0, 2.0 / mm)
+            time.sleep(max(0.4, begin + peel) if peel else 0.4)
             self._angle_after(mm)
-            time.sleep(self.peel_time_for(mm))
             ack()
         elif c == 0x3D:
             if self.half_teeth == 0xFF:
