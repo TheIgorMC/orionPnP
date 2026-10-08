@@ -2385,64 +2385,60 @@ void calibrateZero() {
 }
 
 // ---------------------------
-// Boot-time homing gate - beta1 only. "Homing" here is calibrateZero()
-// above (the DRV8833 still/breakaway duty characterization), the only
-// motor movement this firmware ever does on its own without a host or
+// Boot-time homing gate. "Homing" here is calibrateZero() above (the DRV8833
+// still/breakaway duty characterization, then a seat on the nearest tooth),
+// the only motor movement this firmware ever does on its own without a host or
 // debug-port command asking for it. Deliberately NOT called synchronously
-// from setup() - checkHoming() runs from loop() instead and holds off on
-// calling it until BOTH of these pass:
+// from setup() - checkHoming() runs from loop() so the debug port and RS485
+// bus stay responsive meanwhile. Sequence, per boot:
 //
-// 1. HOMING_BOOT_DELAY_MS plus a per-feeder random jitter
-//    (HOMING_BOOT_JITTER_MAX_MS) have elapsed since setup() finished the
-//    rest of its work. Two reasons: gives this board's own insertion
-//    inrush (TPS26600 soft-start, bulk cap charging) time to settle
-//    before stacking a motor breakaway-current spike on top of it, and -
-//    since every feeder on a bus that just got powered up together hits
-//    this same gate within milliseconds of each other - the random
-//    jitter spreads their homing attempts across ~2s instead of all of
-//    them hitting the shared 12V rail at once. Same idea as
-//    DISCOVERY_JITTER_MAX_MS, just a much wider window: that one only
-//    has to avoid a bus collision, this one has to avoid a PSU current
-//    spike across a whole populated bus.
-// 2. Once a magnet IS seen, it has to stay detected continuously for
-//    HOMING_MAGNET_STABLE_MS before homing fires - a magnet that was
-//    just placed (bench test, wheel/sprocket dropped on while the board
-//    was already running) may still be settling into position, and a
-//    bare "detected this instant" read is too easy to catch mid-
-//    placement. Any dropout resets the stability timer - only a
-//    continuous detection counts. No magnet at all just means this timer
-//    never starts, so no homing ever fires - calibrateZero() already
-//    falls back to defaults without moving the motor in that case, but
-//    gating it here means a feeder with nothing to calibrate against
-//    doesn't even sit through the boot-delay wait for no reason.
+//   boot -> magnet detected continuously for 1-3 s (random per boot)
+//        -> wait 0-5 s more, a fixed function of this feeder's previous bus
+//           address (random if it never had one)
+//        -> home (if the magnet is still there).
+//
+// 1. Magnet stable (HOMING_MAGNET_STABLE_MIN/MAX_MS): once a magnet IS seen it
+//    must stay detected continuously, so a magnet that was just placed (bench
+//    test, wheel dropped on while the board was running) has settled instead
+//    of being caught mid-placement. Any dropout restarts the timer. No magnet
+//    at all means the timer never starts, so no homing and no motion.
+// 2. Spike spreading (HOMING_SPREAD_MAX_MS): feeders on one bus power up
+//    together and all pass step 1 within about 2 s of each other, so each waits
+//    a further 0-5 s before its motors start. Using the old address makes the
+//    offset repeatable and spreads consecutive addresses (golden-ratio hash);
+//    the 2 s window of step 1 plus 5 s here is what keeps the 12 V rail from
+//    seeing every breakaway spike at once. Homing takes about 1-2 s, so a big
+//    bus can still overlap a few feeders.
 //
 // Fires at most once per boot (homingDone latches true right after).
 // ---------------------------
-constexpr unsigned long HOMING_BOOT_DELAY_MS = 1000;      // fixed part of the start delay
-constexpr unsigned long HOMING_BOOT_JITTER_MAX_MS = 2000; // plus 0-2 s, so homing starts 1-3 s after boot
-constexpr unsigned long HOMING_MAGNET_STABLE_MS = 5000;
+constexpr unsigned long HOMING_MAGNET_STABLE_MIN_MS = 1000;
+constexpr unsigned long HOMING_MAGNET_STABLE_MAX_MS = 3000;
+constexpr unsigned long HOMING_SPREAD_MAX_MS = 5000;
 
-// 0-2 s jitter for this feeder. With a remembered address it is a fixed function of
-// that address (golden-ratio hashing, so consecutive addresses land far apart and
-// the same feeder always starts at the same offset); without one it is random.
-unsigned long homingJitterMs(uint8_t lastAddr) {
-  if (lastAddr == 0) return (unsigned long)random(0, HOMING_BOOT_JITTER_MAX_MS + 1);
-  return ((unsigned long)lastAddr * 40503UL % 65536UL) * HOMING_BOOT_JITTER_MAX_MS / 65536UL; // 40503 / 65536 = 0.618
+// 0-HOMING_SPREAD_MAX_MS delay for this feeder. With a remembered address it is a
+// fixed function of it (golden ratio 40503/65536 = 0.618, so consecutive addresses
+// land far apart); without one it is random.
+unsigned long homingSpreadMs(uint8_t lastAddr) {
+  if (lastAddr == 0) return (unsigned long)random(0, HOMING_SPREAD_MAX_MS + 1);
+  return ((unsigned long)lastAddr * 40503UL % 65536UL) * HOMING_SPREAD_MAX_MS / 65536UL;
 }
 
 bool homingDone = false;
-unsigned long homingReadyAtMs = 0; // set once in setup(), after seedSessionNonce() reseeds random()
+unsigned long homingStableNeededMs = HOMING_MAGNET_STABLE_MAX_MS; // set once in setup(), after seedSessionNonce() reseeds random()
+unsigned long homingSpreadDelayMs = 0;                            // set once in setup(), needs slotInfo
 unsigned long magnetStableSinceMs = 0; // millis() the magnet was last (re)detected; only meaningful while magnetTrackedLastLoop
 bool magnetTrackedLastLoop = false;
+unsigned long homingFireAtMs = 0;      // 0 = magnet not yet stable; else when to home
 
 void checkHoming() {
   if (homingDone) return;
 
   const unsigned long now = millis();
-  if (now < homingReadyAtMs) return; // still in the boot settle/stagger window
 
   if (!magnetDetected()) {
     magnetTrackedLastLoop = false;
+    homingFireAtMs = 0; // lost it: start over
     return; // nothing to home against yet - keep waiting, not a failure
   }
 
@@ -2453,10 +2449,20 @@ void checkHoming() {
     return;
   }
 
-  if (now - magnetStableSinceMs < HOMING_MAGNET_STABLE_MS) return; // not stable long enough yet
+  if (homingFireAtMs == 0) {
+    if (now - magnetStableSinceMs < homingStableNeededMs) return; // not stable long enough yet
+    homingFireAtMs = now + homingSpreadDelayMs;
+    if (homingFireAtMs == 0) homingFireAtMs = 1; // keep 0 meaning "not set"
+    Serial1.print(F("magnet stable, homing in "));
+    Serial1.print(homingSpreadDelayMs);
+    Serial1.println(F(" ms"));
+    return;
+  }
+
+  if ((long)(now - homingFireAtMs) < 0) return; // still in this feeder's spread slot
 
   homingDone = true;
-  Serial1.println(F("magnet stable, homing"));
+  Serial1.println(F("homing"));
   calibrateZero();
 }
 
@@ -2867,9 +2873,10 @@ void setup() {
 
   seedSessionNonce(); // also reseeds random() - safe to draw the homing jitter right after
   loadSlotInfo(); // before the stagger below needs lastAddr
-  // Homing starts 1-3 s after boot, spread by the address this feeder had last
-  // time so a populated bus does not start all its motors together.
-  homingReadyAtMs = millis() + HOMING_BOOT_DELAY_MS + homingJitterMs(slotInfo.lastAddr);
+  // Homing timing (see the homing gate): a random 1-3 s magnet-stable wait, then
+  // an address-based 0-5 s spread. slotInfo (last address) must be loaded first.
+  homingStableNeededMs = HOMING_MAGNET_STABLE_MIN_MS + (unsigned long)random(0, HOMING_MAGNET_STABLE_MAX_MS - HOMING_MAGNET_STABLE_MIN_MS + 1);
+  homingSpreadDelayMs = homingSpreadMs(slotInfo.lastAddr);
   loadConfig(); // busAddress always starts ADDR_UNASSIGNED - re-earned via CMD_DISCOVER each boot
   loadHwInfo(); // tape width etc - set once at assembly, never reset by config changes
   loadFactorySerial(); // AT24CS02 identification page - read fresh every boot, never cached to EEPROM

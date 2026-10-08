@@ -147,14 +147,17 @@ measured). **Not yet run on a real board.**
    to the tape zero: after the duty ramps it seats on the NEAREST tooth of the
    grid (`snapToTooth(false)`, at most 4.5 deg / 2 mm either way). The pick
    position is reached later by relative moves from that tooth. `SNAP` and
-   other seats still approach backwards only. A feeder starts homing 1-3 s after boot: 1 s fixed
-   plus 0-2 s of jitter that is a fixed function of its previous bus address
-   (golden-ratio hash, so consecutive addresses land far apart and a given
-   feeder always gets the same offset); a feeder with no remembered address
-   uses random jitter. The 5 s magnet-stable wait comes after that, so the
-   offsets are kept. Homing takes about 1-2 s and a 2 s window cannot spread
-   more than a few feeders without overlap, so a big bus still draws several
-   motors at once.
+   other seats still approach backwards only. Homing timing: boot, then the magnet must be
+   detected continuously for a random 1-3 s (`HOMING_MAGNET_STABLE_MIN/MAX_MS`,
+   was a fixed 5 s), then a further 0-5 s that is a fixed function of the
+   previous bus address (`HOMING_SPREAD_MAX_MS`, golden-ratio hash so
+   consecutive addresses land far apart and the same feeder always gets the
+   same slot; random for a feeder with no remembered address), then homing,
+   if the magnet is still there. The spread comes AFTER the stable wait, so
+   all feeders reach it within about 2 s of each other and the 5 s window
+   then separates them. Homing takes about 1-2 s, so a big bus can still
+   overlap a few feeders; widen `HOMING_SPREAD_MAX_MS` if the rail still
+   sags.
 
 ## Open questions
 
