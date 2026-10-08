@@ -2418,11 +2418,17 @@ void calibrateZero() {
 //
 // Fires at most once per boot (homingDone latches true right after).
 // ---------------------------
-constexpr unsigned long HOMING_BOOT_DELAY_MS = 1000;
-constexpr unsigned long HOMING_BOOT_JITTER_MAX_MS = 2000; // wider than DISCOVERY_JITTER_MAX_MS - staggers PSU inrush across a whole bus, not just a bus collision
+constexpr unsigned long HOMING_BOOT_DELAY_MS = 1000;      // fixed part of the start delay
+constexpr unsigned long HOMING_BOOT_JITTER_MAX_MS = 2000; // plus 0-2 s, so homing starts 1-3 s after boot
 constexpr unsigned long HOMING_MAGNET_STABLE_MS = 5000;
-constexpr unsigned long HOMING_STAGGER_MS = 1000;   // one homing start per address, so motors don't all draw at once
-constexpr uint8_t HOMING_STAGGER_MAX_SLOTS = 60;    // cap: address 200 would otherwise wait over three minutes
+
+// 0-2 s jitter for this feeder. With a remembered address it is a fixed function of
+// that address (golden-ratio hashing, so consecutive addresses land far apart and
+// the same feeder always starts at the same offset); without one it is random.
+unsigned long homingJitterMs(uint8_t lastAddr) {
+  if (lastAddr == 0) return (unsigned long)random(0, HOMING_BOOT_JITTER_MAX_MS + 1);
+  return ((unsigned long)lastAddr * 40503UL % 65536UL) * HOMING_BOOT_JITTER_MAX_MS / 65536UL; // 40503 / 65536 = 0.618
+}
 
 bool homingDone = false;
 unsigned long homingReadyAtMs = 0; // set once in setup(), after seedSessionNonce() reseeds random()
@@ -2861,12 +2867,9 @@ void setup() {
 
   seedSessionNonce(); // also reseeds random() - safe to draw the homing jitter right after
   loadSlotInfo(); // before the stagger below needs lastAddr
-  // Stagger homing by the address this feeder had last time (HOMING_STAGGER_MS
-  // per address), so a populated bus does not start all its motors together;
-  // a feeder that never had an address falls back to a random delay.
-  homingReadyAtMs = millis() + HOMING_BOOT_DELAY_MS
-      + (slotInfo.lastAddr ? (unsigned long)(slotInfo.lastAddr > HOMING_STAGGER_MAX_SLOTS ? HOMING_STAGGER_MAX_SLOTS : slotInfo.lastAddr) * HOMING_STAGGER_MS
-                           : (unsigned long)random(0, HOMING_BOOT_JITTER_MAX_MS + 1));
+  // Homing starts 1-3 s after boot, spread by the address this feeder had last
+  // time so a populated bus does not start all its motors together.
+  homingReadyAtMs = millis() + HOMING_BOOT_DELAY_MS + homingJitterMs(slotInfo.lastAddr);
   loadConfig(); // busAddress always starts ADDR_UNASSIGNED - re-earned via CMD_DISCOVER each boot
   loadHwInfo(); // tape width etc - set once at assembly, never reset by config changes
   loadFactorySerial(); // AT24CS02 identification page - read fresh every boot, never cached to EEPROM
