@@ -201,7 +201,14 @@ const float PICK_OFFSET_MM = 0.0f; // TODO: measure once, see comment above
 // ---------------------------
 // Motion / control tuning (unchanged from TestBench03/04)
 // ---------------------------
+// How close (deg) a closed-loop move must get before it stops. 0.30 deg = +-0.13 mm of tape at 2.25 deg/mm.
+// The AS5600 steps in 0.088 deg, so values below ~0.2 risk the loop hunting (it keeps reversing around the
+// target) and ERR_TIMEOUT/ERR_STALL. The atmega328pb_isp_tight PlatformIO env overrides it for A/B testing.
+#ifdef ANGLE_TOLERANCE_DEG_OVERRIDE
+const float ANGLE_TOLERANCE_DEG = ANGLE_TOLERANCE_DEG_OVERRIDE;
+#else
 const float ANGLE_TOLERANCE_DEG = 0.30f;
+#endif
 const float CREEP_THRESHOLD_DEG = 3.0f;
 const int   FAST_DUTY = 110;
 const int   DEFAULT_MIN_MOVE_DUTY = 60;

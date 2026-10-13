@@ -50,16 +50,17 @@
   ./flash.ps1                      # full sequence: build, fuses, erase, wait, flash+verify
   .EXAMPLE
   ./flash.ps1 -SkipFuses           # routine reflash, fuses already set
+  ./flash.ps1 -EnvName atmega328pb_isp_tight -SkipFuses   # tighter positioning (A/B test build)
 #>
 
 param(
+  [string]$EnvName = "atmega328pb_isp",
   [switch]$SkipFuses,
   [switch]$SkipErase,
   [int]$SettleSeconds = 2
 )
 
 $ErrorActionPreference = "Stop"
-$EnvName = "atmega328pb_isp"
 $PlatformioRoot = Join-Path $env:USERPROFILE ".platformio"
 $Avrdude = Join-Path $PlatformioRoot "packages\tool-avrdude\avrdude.exe"
 $AvrdudeConf = Join-Path $PlatformioRoot "packages\tool-avrdude\avrdude.conf"
