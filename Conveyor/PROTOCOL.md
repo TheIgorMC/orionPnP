@@ -143,8 +143,17 @@ All persisted. Defaults are placeholders until the mechanics are known.
 | 0x1C | `EXIT_DISTANCE` | 0.01 mm | 35000 | forward unload: belt travel from the stop position |
 | 0x1D | `WATCHDOG` | s | 10 | no valid frame for this device for this long while moving: stop (`ERR_WATCHDOG`). 0 = off. Clamp and stopper stay as they are |
 
-Saved besides the parameters: the last **width** (after every width move or definition), the **clamp state** and **board
-loaded** (so a power cycle does not forget a clamped board; the clamp holds its angle after boot), and the board length.
+Saved besides the parameters: the last **width** (after every width move or definition), the **clamp state**, **board
+loaded**, the **stopper state** and the board length.
+
+**Power-up behaviour (decided):** the clamp **stays engaged** across a power cycle. The cam holds the board mechanically,
+so a job that was stopped can resume without reloading. At boot the controller restores "board loaded", the length and the
+stopper state from storage; if the clamp was engaged it sets `pos = STOP_DISTANCE` (`pos` valid), because a clamped board
+is at the stop. The clamp servo is not moved at boot: its output is enabled at the stored angle, so it does not twitch or
+release. Everything that depends on the board stays refused as usual (belt moves, width moves: `ERR_CLAMPED` /
+`ERR_BOARD_PRESENT`) until the host releases the clamp. The host sees `board loaded` + `clamp engaged` in the first status
+and can continue the job. If the user removed the board while the power was off, `C_CLEAR` (after releasing the clamp)
+resets the memory.
 
 ## 7. Unload direction and the board at the entry
 
@@ -218,13 +227,13 @@ the load sequence for it at once.
 
 ## 11. Open points
 
+(Clamp across power cycles is decided: it stays engaged, section 6.)
+
 1. **Stop sensor**: undecided how to make it work well. Capability bit 2 stays; nothing depends on it.
 2. **Boards longer than `STOP_DISTANCE`** cannot be measured by passing the sensor. Keep the sensor-to-pin distance
    longer than the longest board, or measure the length on the way out in a backwards unload (the trailing-edge event,
    `pos` at that moment is `D - L`). The draft keeps the first option.
 3. Default values (speeds, currents, distances, servo angles) need the real mechanics.
-4. Clamp state is persisted and re-asserted after boot: confirm that is the wanted power-up behaviour (the alternative is
-   releasing it, which could drop a held board while the machine is being powered up).
 
 ## 12. Host side (for later, not part of this draft)
 
