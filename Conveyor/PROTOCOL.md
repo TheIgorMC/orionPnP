@@ -90,7 +90,7 @@ feeder on rail 2 and make STOP impossible. So **motion commands answer immediate
 | `C_SET_CFG` | 0x54 | `[id, value(4)]` | `CMD_ACK` / `NACK [BAD_PARAM]` | one parameter, stored at once (section 6) |
 | `C_GET_CFG` | 0x55 | `[id]` | `C_CFG` (0xC2): `[id, value(4)]` | |
 | `C_MOVE` | 0x58 | `[delta int32]` | `CMD_ACK` / `NACK` | relative belt move, 0.01 mm, negative = backwards, at `SPEED_FEED`. Refused when clamped (`ERR_CLAMPED`); a backwards move is refused while a waiting board is at the entry (`ERR_ENTRY_BLOCKED`). Updates `pos` (and `posNext`) |
-| `C_LOAD` | 0x59 | `[flags]` b0 = skip positioning | `CMD_ACK` / `NACK` | loads the board at the entry: forward, zero at the leading edge if not yet detected, on until the trailing edge clears the sensor, store `length`, then (unless b0) as `C_GOTO_STOP`. Sets "board loaded". Refused while another board is loaded (`ERR_BOARD_PRESENT`) |
+| `C_LOAD` | 0x59 | `[flags]` b0 = skip positioning | `CMD_ACK` / `NACK` | loads the **next board** (the one at the entry, or the tracked waiting board after a forward unload): forward, zero at the leading edge if not yet detected, on until the trailing edge clears the sensor, store `length`, then (unless b0) as `C_GOTO_STOP`. Sets "board loaded". Refused while another board is loaded (`ERR_BOARD_PRESENT`) |
 | `C_MEASURE` | 0x5A | none | `CMD_ACK` / `NACK` | only the measuring pass, no positioning. Ends with `length` valid |
 | `C_GOTO_STOP` | 0x5B | none | `CMD_ACK` / `NACK` | moves the leading edge to `STOP_DISTANCE`. With the stopper extended it drives on by `PUSH` at `SPEED_SLOW` so the belt slips under the board while it rests on the pin. Needs a known `pos` |
 | `C_UNLOAD` | 0x5C | none | `CMD_ACK` / `NACK` | direction by `UNLOAD_DIR`, see section 7. Refused when clamped (`ERR_CLAMPED`) or when there is no loaded board (`ERR_NO_BOARD`). Clears "board loaded" when it ends |
@@ -110,7 +110,7 @@ was inserted, waiting for the host" and `pos` is zeroed; with it set this is a *
 `flags` (16 bits): b0 entry sensor blocked, b1 stop sensor blocked (if fitted), b2 clamp engaged, b3 stopper extended,
 b4 `pos` valid, b5 `length` valid, b6 width homed since power-up, b7 driver fault (TMC2209), b8 **board loaded**,
 b9 **board waiting at the entry** (blocked while one is loaded), b10 **width confirmed** (homed or defined since
-power-up; clear = the value is only the last saved one), b11 waiting board's length valid.
+power-up; clear = the value is only the last saved one), b11 waiting board's length valid, b12 **board leaving** (the unloaded board has not left the entry sensor yet: it is being taken out, so it is not reported as a newly inserted board).
 
 ## 6. Configuration parameters (`C_SET_CFG` / `C_GET_CFG`)
 
