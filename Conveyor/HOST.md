@@ -19,3 +19,15 @@ Implemented against a simulated controller (`SimulatedConveyor`), 14 unit tests.
 ![inserted](img/conv_2_inserted.png)
 ![loaded](img/conv_3_loaded.png)
 ![waiting](img/conv_4_waiting.png)
+
+## Board size check
+
+The expected board is the job's panel / board dimensions, or two sides entered by hand (A / B, 0 = take it from the job).
+The measured length and the set width are compared with it, either way round (a board can go in long or short side
+first): the length against one side, the width against the other side plus the guide clearance (default 0.5 mm), both
+within the tolerance (default 2 mm). A mismatch shows a **Check the board** bar, a message after loading, and a question
+before a width is set that does not fit. The width is also checked before any board is loaded.
+
+**Edge strip** (default 3 mm per side): the strip along each board edge that the guides and the clamp cover. It is shown as
+the usable area, and when the job has a single board with its origin at a corner, placements closer than that to an edge
+are counted in the warning. With the origin elsewhere that check is skipped.
